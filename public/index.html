@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HeatMap 360</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>HeatMap 360</h1>
+    <p id="feeds" class="muted">Loading...</p>
+  </header>
+  <main>
+    <section aria-labelledby="map-title">
+      <h2 id="map-title">Machines</h2>
+      <p class="muted">Each cell is a heat score from 0 (cool) to 100 (hot). Select a machine for its checks and the known exploited vulnerabilities that may affect it.</p>
+      <table id="map"><thead><tr><th>Machine</th><th>OS</th><th>Health</th><th>Patching</th><th>Exposure</th><th>Overall</th><th>Collected</th></tr></thead><tbody></tbody></table>
+      <p id="empty" class="muted" hidden>No collector data yet. Run <code>collectors\Invoke-HM360Collect.ps1</code> on a computer.</p>
+      <div id="rejected"></div>
+    </section>
+    <section id="detail" hidden aria-live="polite"></section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

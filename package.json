@@ -1,0 +1,19 @@
+{
+  "name": "heatmap-360",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HeatMap 360: machine health and known in-the-wild vulnerabilities per computer",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "node --watch --env-file-if-exists=.env server/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check server/index.mjs && node --check server/model.mjs && node --check server/store.mjs && node --check server/feeds.mjs && node --check public/app.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

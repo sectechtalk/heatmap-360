@@ -1,0 +1,12 @@
+# hm360: dashboard + feed cache in one container. Published on 127.0.0.1 only (no sign-in yet).
+services:
+  hm360:
+    build: .
+    image: hm360:local
+    container_name: hm360
+    restart: unless-stopped
+    ports:
+      - "${HM360_PUBLISH_IP:-127.0.0.1}:3460:3460"
+    volumes:
+      - ./data/inbox:/data/inbox      # envelopes written by collectors\Invoke-HM360Collect.ps1 on each PC
+      - ./data/feeds:/data/feeds      # cached CISA KEV + EPSS (refreshed daily)
