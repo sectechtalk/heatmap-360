@@ -38,7 +38,7 @@ image `ghcr.io/sectechtalk/heatmap-360:<tag>` built from this repo's Dockerfile.
 | Variable | Value |
 |---|---|
 | `HM360_PUBLIC_URL` | `https://<app fqdn>` (also fills in the scanner download) |
-| `HM360_DATA_REPO` | `sectechtalk/heatmap-360-data` |
+| `HM360_DATA_REPO` | `<your-account>/hm-360-data` |
 | `HM360_GITHUB_TOKEN` | secret ref `hm360-github-token` |
 | `HM360_TENANT_ID` | tenant ID |
 | `HM360_CLIENT_ID` | hm360-web application (client) ID |
