@@ -1,4 +1,4 @@
-// Free vulnerability feeds, cached on disk so the dashboard works offline and the feeds are fetched at most daily.
+// Free vulnerability feeds for the bot, cached on disk and fetched at most daily.
 //   kev   CISA Known Exploited Vulnerabilities: CVEs exploited in the wild (no key needed).
 //   epss  FIRST EPSS scores: probability of exploitation in the next 30 days, looked up for KEV CVEs only.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';

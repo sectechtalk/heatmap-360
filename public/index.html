@@ -2,25 +2,34 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>HeatMap 360</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>HeatMap 360</h1>
-    <p id="feeds" class="muted">Loading...</p>
-  </header>
-  <main>
-    <section aria-labelledby="map-title">
-      <h2 id="map-title">Machines</h2>
-      <p class="muted">Each cell is a heat score from 0 (cool) to 100 (hot). Select a machine for its checks and the known exploited vulnerabilities that may affect it.</p>
-      <table id="map"><thead><tr><th>Machine</th><th>OS</th><th>Health</th><th>Patching</th><th>Exposure</th><th>Overall</th><th>Collected</th></tr></thead><tbody></tbody></table>
-      <p id="empty" class="muted" hidden>No collector data yet. Run <code>collectors\Invoke-HM360Collect.ps1</code> on a computer.</p>
-      <div id="rejected"></div>
-    </section>
-    <section id="detail" hidden aria-live="polite"></section>
-  </main>
+  <div class="shell">
+    <nav class="rail" aria-label="Main">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="2" y="2" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="12" y="2" width="8" height="8" rx="2" fill="#e8b454"/><rect x="22" y="2" width="8" height="8" rx="2" fill="#b3261e"/>
+          <rect x="2" y="12" width="8" height="8" rx="2" fill="#e8b454"/><rect x="12" y="12" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="22" y="12" width="8" height="8" rx="2" fill="#e8b454"/>
+          <rect x="2" y="22" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="12" y="22" width="8" height="8" rx="2" fill="#b3261e"/><rect x="22" y="22" width="8" height="8" rx="2" fill="#1d7a3e"/>
+        </svg>
+        <div><div class="brand-name">HeatMap 360</div><div class="brand-sub">Health · Updates · Exposure</div></div>
+      </div>
+      <div class="nav-group"><div class="nav-label">Results</div>
+        <a class="nav-item" href="#scans" data-route="scans">Scans</a>
+      </div>
+      <div class="nav-group"><div class="nav-label">Tools</div>
+        <a class="nav-item" href="#actions" data-route="actions">Actions</a>
+      </div>
+      <div class="nav-group"><div class="nav-label">Get started</div>
+        <a class="nav-item" href="#scanner" data-route="scanner">Get the scanner</a>
+      </div>
+      <div class="rail-foot" id="account"></div>
+    </nav>
+    <main class="main"><div class="page" id="view"><p class="muted">Loading...</p></div></main>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

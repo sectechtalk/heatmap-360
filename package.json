@@ -11,9 +11,12 @@
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "dev": "node --watch --env-file-if-exists=.env server/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server/index.mjs && node --check server/model.mjs && node --check server/store.mjs && node --check server/feeds.mjs && node --check public/app.js"
+    "check": "node --check server/index.mjs && node --check server/auth.mjs && node --check server/datastore.mjs && node --check server/report.mjs && node --check bot/run.mjs && node --check bot/analyze.mjs && node --check public/app.js"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "@azure/msal-node": "^3.8.0",
+    "ajv": "^8.20.0",
+    "express": "^5.1.0",
+    "pdfkit": "^0.17.2"
   }
 }

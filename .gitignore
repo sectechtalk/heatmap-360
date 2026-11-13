@@ -3,7 +3,6 @@ data/
 .env
 .env.*
 *.log
-collectors/hm360.config.json
 # Never commit keys or credentials
 *.pfx
 *.p12

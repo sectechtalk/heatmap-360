@@ -1,0 +1,24 @@
+{
+  "schema": "hm360.inventory/1", "clientVersion": "1.0.0", "collectedAt": "2026-11-12T18:00:00Z", "machineId": "0123456789abcdef",
+  "uptimeHours": 500, "pendingReboot": true,
+  "os": { "name": "Microsoft Windows 11 Pro", "displayVersion": "24H2", "build": 26100, "ubr": 9711, "edition": "Professional", "architecture": "64-bit" },
+  "updates": [ { "id": "KB5127648", "description": "Security Update", "installedOn": "2026-10-14" }, { "id": "KB5000000", "description": "Update", "installedOn": "2026-09-10" } ],
+  "health": {
+    "defender": { "enabled": true, "realTime": true, "signatureAgeDays": 1, "engineVersion": "1.1.25000.1" },
+    "bitlocker": { "protection": "On" }, "secureBoot": true, "tpm": { "present": true, "ready": true, "manufacturerVersion": "7.2.3.1" },
+    "firewall": { "domain": true, "private": true, "public": false }
+  },
+  "hardware": {
+    "system": { "manufacturer": "Contoso", "model": "Laptop 14", "family": "ContosoBook" }, "memoryGB": 31.7,
+    "bios": { "vendor": "Contoso", "version": "1.18.0", "releaseDate": "2026-03-02" },
+    "baseboard": { "manufacturer": "Contoso", "product": "0X1234", "version": "A01" },
+    "cpu": [ { "name": "Example CPU 12-core", "manufacturer": "GenuineIntel" } ],
+    "disks": [ { "model": "Example NVMe 1TB", "firmware": "3B2QGXA7", "mediaType": "SSD", "busType": "NVMe", "sizeGB": 954 } ],
+    "volumes": [ { "drive": "C:", "sizeGB": 100, "freeGB": 8 } ],
+    "devices": [ { "class": "NET", "name": "Example Wi-Fi 7 Adapter", "manufacturer": "Example", "driverProvider": "Example", "driverVersion": "23.60.1.2", "driverDate": "2026-05-01" } ]
+  },
+  "apps": [ { "name": "Google Chrome", "version": "130.0.1", "publisher": "Google LLC" }, { "name": "Adobe Acrobat (64-bit)", "version": "24.1", "publisher": "Adobe" }, { "name": "7-Zip 24.08 (x64)", "version": "24.08", "publisher": "Igor Pavlov" } ],
+  "winget": [ { "id": "Google.Chrome", "version": "130.0.1", "source": "winget" }, { "id": "7zip.7zip", "version": "24.08", "source": "winget" },
+              { "id": "Broken.Lookup", "version": "1.0", "source": "winget" }, { "id": "9NBLGGH4NNS1", "version": "1.2", "source": "msstore" } ],
+  "errors": [ "bitlocker: Access denied" ]
+}
