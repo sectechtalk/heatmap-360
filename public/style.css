@@ -144,3 +144,10 @@ ol.steps-list li::marker { font-weight: 600; color: var(--accent); }
 }
 .panel h3 { margin: 18px 0 8px; }
 pre.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+.option > span { display: flex; flex-direction: column; gap: 2px; }
+.option:has(.num-input) { grid-template-columns: minmax(0, 1fr) auto; }
+.num-input { width: 80px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; }
+.incidents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.incidents li { border-left: 3px solid var(--line); padding-left: 10px; }

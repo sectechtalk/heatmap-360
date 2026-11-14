@@ -42,6 +42,28 @@ export function healthChecks(inv, now = Date.now(), cfg = {}) {
     const pct = (v.freeGB / v.sizeGB) * 100;
     out.push(check(`disk:${v.drive}`, `Free space on ${v.drive}`, pct < badFree ? 'bad' : pct < warnFree ? 'warn' : 'ok', `${pct.toFixed(0)}% free (${v.freeGB} of ${v.sizeGB} GB)`));
   }
+  for (const [n, d] of (inv.hardware?.disks || []).entries()) {
+    if (!d) continue;
+    const name = d.model || `Disk ${n + 1}`;
+    const bad = [], warn = [];
+    if (/unhealthy/i.test(d.health || '')) bad.push('Windows reports it as unhealthy');
+    else if (/warning/i.test(d.health || '')) warn.push('Windows reports a health warning');
+    if ((d.readErrorsUncorrected ?? 0) + (d.writeErrorsUncorrected ?? 0) > 0) bad.push(`${(d.readErrorsUncorrected ?? 0) + (d.writeErrorsUncorrected ?? 0)} uncorrected read/write errors`);
+    if (typeof d.wearPercent === 'number') (d.wearPercent >= 95 ? bad : d.wearPercent >= 80 ? warn : []).push(`${d.wearPercent}% of rated life used`);
+    if (typeof d.temperatureC === 'number' && d.temperatureC >= 70) warn.push(`${d.temperatureC} °C`);
+    const known = d.health || typeof d.wearPercent === 'number' || d.readErrorsUncorrected != null;
+    if (!known) continue;
+    const parts = [...bad, ...warn];
+    const facts = [typeof d.wearPercent === 'number' && `${d.wearPercent}% worn`, typeof d.temperatureC === 'number' && `${d.temperatureC} °C`, typeof d.powerOnHours === 'number' && `${Math.round(d.powerOnHours).toLocaleString('en-US')} hours powered on`].filter(Boolean);
+    out.push(check(`diskhealth:${n}`, `Disk health: ${name}`, bad.length ? 'bad' : warn.length ? 'warn' : 'ok',
+      `${parts.length ? `${parts.join('; ')}. Back up this disk and plan to replace it.` : 'Healthy.'}${facts.length ? ` (${facts.join(', ')})` : ''}`));
+  }
+  const b = inv.hardware?.battery;
+  if (b && typeof b.healthPercent === 'number') {
+    const pct = Math.min(b.healthPercent, 100);
+    out.push(check('battery', 'Battery health', pct < 50 ? 'bad' : pct < 80 ? 'warn' : 'ok',
+      `Holds ${pct}% of its original charge${b.cycleCount ? ` after ${b.cycleCount} charge cycles` : ''}.${pct < 80 ? ' Expect shorter run time; consider a replacement battery.' : ''}`));
+  }
   return out;
 }
 

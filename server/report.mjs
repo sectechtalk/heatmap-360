@@ -73,6 +73,42 @@ export function renderReport(result, { now = new Date() } = {}) {
   h2('Health checks');
   table(['Check', 'Result', 'Detail'], (result.health || []).map(c => [c.label, WORD[c.status] || c.status, c.detail]), [3, 2, 4]);
 
+  const ev = result.eventLog;
+  if (ev) {
+    h2('Event log (last 7 days)');
+    if (ev.status !== 'checked') p(ev.reason || ev.error || 'Not checked', C.muted);
+    else {
+      badge(ev.grade, ev.reason);
+      if (ev.findings?.length) table(['What happened', 'Times', 'Result', 'What to do'], ev.findings.map(f => [f.label, f.count, f.status === 'info' ? 'Note' : WORD[f.status] || f.status, f.advice]), [3, 1, 1.5, 5]);
+      p('Counts only: event messages are never collected.', C.muted, 8);
+    }
+  }
+
+  const nh = result.networkHealth;
+  if (nh) {
+    h2('Network health');
+    if (nh.status !== 'checked') p(nh.reason || nh.error || 'Not checked', C.muted);
+    else {
+      badge(nh.grade, nh.reason);
+      table(['Check', 'Result', 'Detail'], nh.checks.map(c => [c.label, WORD[c.status] || c.status, c.detail]), [3, 1.5, 5.5]);
+      p('Speed measured against Cloudflare\'s public speed test. No addresses are collected.', C.muted, 8);
+    }
+  }
+
+  const net = result.network;
+  if (net) {
+    h2('Network adapters');
+    if (net.status !== 'checked') p(net.reason || net.error || 'Not checked', C.muted);
+    else {
+      badge(net.grade, net.reason);
+      const rows = net.adapters.map(a => [a.description, a.connected ? `${a.linkSpeedMbps ?? '?'} Mbps${a.fullDuplex === false ? ' half duplex' : ''}` : a.status || 'Not connected',
+        [a.driverVersion, a.driverDate && `(${a.driverDate})`].filter(Boolean).join(' '), a.findings.filter(f => f.status !== 'ok').map(f => f.label).join('; ')]);
+      if (rows.length) table(['Adapter', 'Link', 'Driver', 'Findings'], rows, [4, 2, 2.5, 3.5]);
+      if (net.wifi) kv('Wi-Fi', [net.wifi.signalPercent != null && `signal ${net.wifi.signalPercent}%`, net.wifi.radioType, net.wifi.band].filter(Boolean).join(', '));
+      for (const f of [...net.adapters.flatMap(a => a.findings), ...(net.wifi?.findings || [])].filter(x => x.status === 'warn' || x.status === 'bad')) p(`• ${f.label}: ${f.detail}`, C.ink, 9);
+    }
+  }
+
   const ex = result.exploited || {};
   if (ex.candidates?.length) {
     h2('Vulnerabilities exploited in the wild that may apply (CISA KEV)');
@@ -81,6 +117,13 @@ export function renderReport(result, { now = new Date() } = {}) {
   }
 
   h2('Hardware');
+  const fw = result.firmware;
+  if (fw) {
+    badge(fw.grade || 'unknown', `BIOS: ${fw.reason || fw.error || ''}`);
+    if (fw.latest?.link) p(`Details: ${fw.latest.link}`, C.muted, 8);
+    else if (fw.support) p(`${fw.vendor} support: ${fw.support}`, C.muted, 8);
+    doc.moveDown(0.3);
+  }
   p(result.hardware?.note || '', C.muted, 9);
   const hw = inv.hardware || {};
   kv('BIOS', hw.bios ? `${hw.bios.vendor || ''} ${hw.bios.version || ''} (${hw.bios.releaseDate || 'date unknown'})` : null);
@@ -91,7 +134,7 @@ export function renderReport(result, { now = new Date() } = {}) {
   if (hw.devices?.length) table(['Device', 'Class', 'Driver', 'Driver date'], hw.devices.slice(0, 60).map(d => [d.name, d.class, d.driverVersion, d.driverDate || '']), [5, 1.5, 2, 1.5]);
 
   doc.moveDown(1);
-  p('HeatMap 360 reads only official vendor sources (Microsoft release health, the winget catalog, CISA). Lookups that fail are shown as "Not checked" instead of guessed. The scan contains no computer name, user name, address or serial number.', C.muted, 8);
+  p('HeatMap 360 reads only official vendor sources (Microsoft release health, the winget catalog, CISA, and HP and Lenovo update catalogs). Lookups that fail are shown as "Not checked" instead of guessed. The scan contains no computer name, user name, address, network name, serial number or event message.', C.muted, 8);
   doc.end();
   return done;
 }

@@ -1,5 +1,5 @@
 {
-  "schema": "hm360.inventory/1", "clientVersion": "1.0.0", "collectedAt": "2026-11-12T18:00:00Z", "machineId": "0123456789abcdef",
+  "schema": "hm360.inventory/1", "clientVersion": "1.2.0", "collectedAt": "2026-11-12T18:00:00Z", "machineId": "0123456789abcdef",
   "uptimeHours": 500, "pendingReboot": true,
   "os": { "name": "Microsoft Windows 11 Pro", "displayVersion": "24H2", "build": 26100, "ubr": 9711, "edition": "Professional", "architecture": "64-bit" },
   "updates": [ { "id": "KB5127648", "description": "Security Update", "installedOn": "2026-10-14" }, { "id": "KB5000000", "description": "Update", "installedOn": "2026-09-10" } ],
@@ -13,10 +13,39 @@
     "bios": { "vendor": "Contoso", "version": "1.18.0", "releaseDate": "2026-03-02" },
     "baseboard": { "manufacturer": "Contoso", "product": "0X1234", "version": "A01" },
     "cpu": [ { "name": "Example CPU 12-core", "manufacturer": "GenuineIntel" } ],
-    "disks": [ { "model": "Example NVMe 1TB", "firmware": "3B2QGXA7", "mediaType": "SSD", "busType": "NVMe", "sizeGB": 954 } ],
+    "disks": [ { "model": "Example NVMe 1TB", "firmware": "3B2QGXA7", "mediaType": "SSD", "busType": "NVMe", "sizeGB": 954,
+                 "health": "Healthy", "wearPercent": 84, "temperatureC": 41, "temperatureMaxC": 80, "readErrorsUncorrected": 0, "writeErrorsUncorrected": 0, "powerOnHours": 12034 } ],
+    "battery": { "designMWh": 57000, "fullMWh": 41500, "cycleCount": 412, "healthPercent": 72.8 },
     "volumes": [ { "drive": "C:", "sizeGB": 100, "freeGB": 8 } ],
     "devices": [ { "class": "NET", "name": "Example Wi-Fi 7 Adapter", "manufacturer": "Example", "driverProvider": "Example", "driverVersion": "23.60.1.2", "driverDate": "2026-05-01" } ]
   },
+  "eventLog": { "days": 7, "entries": [
+    { "log": "System", "provider": "Microsoft-Windows-Kernel-Power", "eventId": 41, "level": "critical", "count": 2, "lastSeen": "2026-11-11T08:00:00Z" },
+    { "log": "System", "provider": "EventLog", "eventId": 6008, "level": "error", "count": 2, "lastSeen": "2026-11-11T08:00:05Z" },
+    { "log": "System", "provider": "Microsoft-Windows-WHEA-Logger", "eventId": 17, "level": "warning", "count": 3, "lastSeen": "2026-11-10T08:00:00Z" },
+    { "log": "System", "provider": "Microsoft-Windows-DistributedCOM", "eventId": 10016, "level": "error", "count": 40, "lastSeen": "2026-11-12T08:00:00Z" },
+    { "log": "System", "provider": "Service Control Manager", "eventId": 7031, "level": "error", "count": 1, "lastSeen": "2026-11-09T08:00:00Z" },
+    { "log": "Application", "provider": "Application Error", "eventId": 1000, "level": "error", "count": 4, "lastSeen": "2026-11-12T07:00:00Z" },
+    { "log": "Application", "provider": "Example Agent", "eventId": 300, "level": "error", "count": 6, "lastSeen": "2026-11-12T06:00:00Z" }
+  ] },
+  "network": {
+    "adapters": [
+      { "description": "Example Gigabit Ethernet Controller", "mediaType": "802.3", "status": "Up", "linkSpeedMbps": 100, "fullDuplex": true,
+        "driverVersion": "10.1.0.1", "driverDate": "2021-06-01", "driverProvider": "Example", "powerSaving": "Enabled",
+        "settings": [ { "keyword": "*SpeedDuplex", "name": "Speed & Duplex", "value": "Auto Negotiation" }, { "keyword": "*EEE", "name": "Energy-Efficient Ethernet", "value": "Enabled" } ] },
+      { "description": "Example Wi-Fi 7 Adapter", "mediaType": "Native 802.11", "status": "Up", "linkSpeedMbps": 866.7, "fullDuplex": true,
+        "driverVersion": "23.60.1.2", "driverDate": "2026-05-01", "driverProvider": "Example", "powerSaving": "Enabled", "settings": [] },
+      { "description": "Example USB Ethernet", "mediaType": "802.3", "status": "Disconnected", "linkSpeedMbps": 0, "fullDuplex": false,
+        "driverVersion": "1.0", "driverDate": "2015-01-01", "driverProvider": "Example", "powerSaving": "Enabled", "settings": [] }
+    ],
+    "wifi": { "radioType": "802.11ac", "band": "5 GHz", "channel": 36, "signalPercent": 52, "receiveMbps": 866.7, "transmitMbps": 650 }
+  },
+  "networkHealth": { "via": "wifi",
+    "gateway": { "sent": 20, "received": 19, "lossPercent": 5, "minMs": 2, "avgMs": 38.5, "maxMs": 210, "jitterMs": 24.1 },
+    "internet": { "sent": 10, "received": 10, "lossPercent": 0, "minMs": 14.2, "avgMs": 18.9, "maxMs": 31, "jitterMs": 3.2 },
+    "dns": { "ms": 41.3, "ok": true },
+    "speed": { "downloadMbps": 212.4, "uploadMbps": 11.8, "bytesDown": 25000000, "bytesUp": 10000000, "server": "speed.cloudflare.com" },
+    "speedSkipped": false },
   "apps": [ { "name": "Google Chrome", "version": "130.0.1", "publisher": "Google LLC" }, { "name": "Adobe Acrobat (64-bit)", "version": "24.1", "publisher": "Adobe" }, { "name": "7-Zip 24.08 (x64)", "version": "24.08", "publisher": "Igor Pavlov" } ],
   "winget": [ { "id": "Google.Chrome", "version": "130.0.1", "source": "winget" }, { "id": "7zip.7zip", "version": "24.08", "source": "winget" },
               { "id": "Broken.Lookup", "version": "1.0", "source": "winget" }, { "id": "9NBLGGH4NNS1", "version": "1.2", "source": "msstore" } ],

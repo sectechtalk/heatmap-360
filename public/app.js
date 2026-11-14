@@ -111,7 +111,10 @@ async function viewScan(id) {
         area(s.grade.apps, 'App updates', a.error || `${a.updates?.length ?? 0} of ${a.checked ?? 0} checked apps have a newer version`, 'sec-apps'),
         area(s.grade.health, 'Health', `${s.healthProblems} check${s.healthProblems === 1 ? '' : 's'} need attention`, 'sec-health'),
         area(s.grade.exploited, 'Exploited in the wild (CISA)', ex.error || `${ex.candidates?.length ?? 0} candidate${ex.candidates?.length === 1 ? '' : 's'} to verify`, 'sec-kev'),
-        area('unknown', 'Hardware and firmware', 'Inventory listed below; vendor update lookups come in a later version', 'sec-hw'))),
+        r.eventLog ? area(s.grade.events, 'Event log (last 7 days)', r.eventLog.reason || r.eventLog.error || 'Not checked', 'sec-events') : null,
+        r.networkHealth ? area(s.grade.netHealth || 'unknown', 'Network health', r.networkHealth.reason || r.networkHealth.error || 'Not checked', 'sec-nethealth') : null,
+        r.network ? area(s.grade.network, 'Network adapters', r.network.reason || r.network.error || 'Not checked', 'sec-network') : null,
+        area(s.grade.firmware || 'unknown', 'BIOS / firmware', r.firmware?.reason || r.firmware?.error || 'Inventory listed below', 'sec-hw'))),
     h('div', { id: 'sec-windows' }, panel('Windows updates', inv.os ? `${inv.os.name || 'Windows'} ${inv.os.displayVersion || ''} · build ${w.installedBuild || ''}` : '',
       h('p', {}, chip(s.grade.windows), ' ', w.reason || w.error || 'Not checked'),
       w.missing?.length ? table(['Update', 'Build', 'Released', 'KB'], w.missing.map(m => h('tr', {}, h('td', {}, m.label || ''), h('td', {}, m.build), h('td', { class: 'nowrap' }, m.date || ''),
@@ -136,7 +139,15 @@ async function viewScan(id) {
         h('p', { class: 'muted small' }, 'Candidates, not confirmed findings: the catalog names products, not versions. Check the installed version against each CVE.'),
         table(['CVE', 'Product', 'Why', 'Ransomware', 'CISA due'], (ex.candidates || []).map(c => h('tr', {}, h('td', { class: 'nowrap' }, link(`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(c.cveID)}`, c.cveID)),
           h('td', {}, c.app ? `${c.app}${c.version ? ` ${c.version}` : ''}` : `${c.vendor} ${c.product}`), h('td', { class: 'muted' }, c.reason), h('td', {}, c.ransomware ? chip('bad', 'Known') : ''), h('td', { class: 'nowrap' }, c.dueDate || ''))), 'No candidates.')])),
+    r.eventLog ? h('div', { id: 'sec-events' }, eventsPanel(r.eventLog)) : null,
+    r.networkHealth ? h('div', { id: 'sec-nethealth' }, panel('Network health', 'Measured by the scanner: router ping, connection time, DNS and speed (Cloudflare speed test)',
+      r.networkHealth.status === 'checked' ? [h('p', {}, chip(r.networkHealth.grade), ' ', r.networkHealth.reason),
+        table(['Check', 'Result', 'Detail'], r.networkHealth.checks.map(c => h('tr', {}, h('td', {}, c.label), h('td', {}, chip(c.status)), h('td', { class: 'muted' }, c.detail))))]
+        : h('p', { class: 'muted' }, r.networkHealth.reason || r.networkHealth.error || 'Not checked'))) : null,
+    r.network ? h('div', { id: 'sec-network' }, networkPanel(r.network)) : null,
     h('div', { id: 'sec-hw' }, panel('Hardware and firmware', r.hardware?.note || '',
+      r.firmware ? firmwareBlock(r.firmware) : null,
+      r.firmware ? h('h3', {}, 'Inventory') : null,
       h('dl', { class: 'kv' },
         h('dt', {}, 'Computer'), h('dd', {}, [sys.manufacturer, sys.model, sys.family && `(${sys.family})`].filter(Boolean).join(' ') || 'Not reported'),
         h('dt', {}, 'BIOS'), h('dd', {}, hw.bios ? `${hw.bios.vendor || ''} ${hw.bios.version || ''}${hw.bios.releaseDate ? `, ${hw.bios.releaseDate}` : ''}` : 'Not reported'),
@@ -152,16 +163,112 @@ async function viewScan(id) {
   ];
 }
 
-// ---------- Actions ----------
-function viewActions() {
-  const soon = (title, text) => h('section', { class: 'panel stack' }, h('div', { class: 'row' }, h('h2', {}, title), chip('info', 'Planned')), h('p', { class: 'muted' }, text), h('button', { class: 'btn', disabled: true }, 'Not available yet'));
+const findingRows = list => list.map(f => h('tr', {}, h('td', {}, chip(f.status === 'info' ? 'info' : f.status, f.status === 'info' ? 'Note' : undefined)), h('td', {}, h('strong', {}, f.label)), h('td', { class: 'muted' }, f.detail || '')));
+
+function eventsPanel(ev) {
+  if (ev.status !== 'checked') return panel('Event log', null, h('p', { class: 'muted' }, ev.reason || ev.error || 'Not checked'));
+  return panel('Event log', `Critical and error events, last ${ev.days} days (counts only; message text is never collected)`,
+    h('p', {}, chip(ev.grade), ' ', ev.reason),
+    table(['Result', 'What happened', 'Times', 'Last seen', 'What to do'], ev.findings.map(f => h('tr', {},
+      h('td', {}, chip(f.status === 'info' ? 'info' : f.status, f.status === 'info' ? 'Note' : undefined)), h('td', {}, h('strong', {}, f.label), h('div', { class: 'muted small' }, f.events.join(', '))),
+      h('td', { class: 'num' }, f.count), h('td', { class: 'nowrap' }, when(f.lastSeen)), h('td', { class: 'muted' }, f.advice))), 'No events point to a hardware or stability problem.'),
+    ev.other?.length ? h('details', {}, h('summary', {}, `${ev.other.length} other error sources`),
+      table(['Log', 'Source', 'Event ID', 'Level', 'Times', 'Last seen'], ev.other.map(e => h('tr', {}, h('td', {}, e.log), h('td', {}, e.provider), h('td', { class: 'num' }, e.eventId), h('td', {}, e.level), h('td', { class: 'num' }, e.count), h('td', { class: 'nowrap' }, when(e.lastSeen)))))) : null,
+    ev.noiseCount ? h('p', { class: 'muted small' }, `${ev.noiseCount} routine events that Windows logs on healthy computers (such as DCOM 10016) were left out.`) : null);
+}
+
+function networkPanel(net) {
+  if (net.status !== 'checked') return panel('Network adapters', null, h('p', { class: 'muted' }, net.reason || net.error || 'Not checked'));
+  const adapter = a => h('div', { class: 'stack' },
+    h('h3', {}, a.description || 'Network adapter', ' ', a.connected ? chip(a.grade) : chip('unknown', a.status || 'Not connected')),
+    h('dl', { class: 'kv' },
+      h('dt', {}, 'Type'), h('dd', {}, a.mediaType === '802.3' ? 'Wired (Ethernet)' : /802\.11/.test(a.mediaType || '') ? 'Wi-Fi' : a.mediaType || 'Unknown'),
+      a.connected ? [h('dt', {}, 'Link'), h('dd', {}, `${a.linkSpeedMbps ?? '?'} Mbps${a.fullDuplex === false ? ', half duplex' : a.fullDuplex ? ', full duplex' : ''}`)] : null,
+      h('dt', {}, 'Driver'), h('dd', {}, [a.driverVersion, a.driverDate && `(${a.driverDate})`, a.driverProvider && `from ${a.driverProvider}`].filter(Boolean).join(' ') || 'Not reported'),
+      a.powerSaving ? [h('dt', {}, 'Power saving'), h('dd', {}, a.powerSaving === 'Enabled' ? 'Windows may turn it off to save power' : a.powerSaving)] : null),
+    a.findings.length ? table(['Result', 'Finding', 'Detail'], findingRows(a.findings)) : null,
+    a.settings?.length ? h('details', {}, h('summary', {}, `${a.settings.length} adapter settings`), table(['Setting', 'Value'], a.settings.map(x => h('tr', {}, h('td', {}, x.name || x.keyword), h('td', {}, x.value ?? ''))))) : null);
+  const w = net.wifi;
+  return panel('Network adapters', 'Physical adapters only; no addresses or network names are collected',
+    h('p', {}, chip(net.grade), ' ', net.reason),
+    w ? h('div', { class: 'stack' }, h('h3', {}, 'Wi-Fi connection ', chip(w.grade)),
+      h('dl', { class: 'kv' }, h('dt', {}, 'Signal'), h('dd', {}, w.signalPercent != null ? `${w.signalPercent}%` : 'Not reported'),
+        h('dt', {}, 'Standard'), h('dd', {}, w.radioType || 'Not reported'), h('dt', {}, 'Band and channel'), h('dd', {}, [w.band, w.channel && `channel ${w.channel}`].filter(Boolean).join(', ') || 'Not reported'),
+        h('dt', {}, 'Rate'), h('dd', {}, w.receiveMbps != null ? `${w.receiveMbps} Mbps down / ${w.transmitMbps ?? '?'} Mbps up (negotiated)` : 'Not reported')),
+      w.findings.filter(f => f.status !== 'ok').length ? table(['Result', 'Finding', 'Detail'], findingRows(w.findings.filter(f => f.status !== 'ok'))) : null) : null,
+    net.adapters.map(adapter));
+}
+
+function firmwareBlock(fw) {
+  const i = fw.installed || {};
+  return h('div', { class: 'stack' },
+    h('p', {}, chip(fw.grade || 'unknown', fw.status === 'update' ? 'BIOS update available' : fw.status === 'current' ? 'BIOS current' : undefined), ' ', fw.reason || fw.error || ''),
+    h('dl', { class: 'kv' },
+      h('dt', {}, 'Installed BIOS'), h('dd', {}, [i.version, i.date && `(${i.date})`, i.ageYears != null && `${i.ageYears} years old`].filter(Boolean).join(' ') || 'Not reported'),
+      fw.latest ? [h('dt', {}, `Newest from ${fw.vendor}`), h('dd', {}, [fw.latest.version, fw.latest.date && `(${fw.latest.date})`].filter(Boolean).join(' '), fw.latest.link ? [' ', link(fw.latest.link, 'Details')] : null)] : null,
+      fw.support ? [h('dt', {}, 'Support site'), h('dd', {}, link(fw.support, `${fw.vendor} drivers and firmware`))] : null),
+    fw.source ? h('p', { class: 'muted small' }, 'Source: ', link(fw.source, `${fw.vendor} update catalog`)) : null);
+}
+
+// ---------- Service health ----------
+const IMPACT = { ok: 'Operational', info: 'Notice', warn: 'Degraded', bad: 'Outage', unknown: 'Not checked' };
+async function viewServices() {
+  const head = h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Service health'), h('p', {}, 'Online services, from each provider’s own public status feed. Refreshed every 5 minutes.')));
+  if (!me.elevated) return [head, gate()];
+  const d = await api('/api/admin/services');
+  const card = p => h('section', { class: 'panel stack' },
+    h('div', { class: 'row' }, h('h2', {}, p.name), chip(p.grade === 'info' ? 'info' : p.grade, p.grade === 'unknown' ? p.summary : IMPACT[p.grade])),
+    h('p', { class: 'muted' }, p.error || p.note || p.summary),
+    p.incidents.length ? h('ul', { class: 'incidents' }, p.incidents.map(i => h('li', {},
+      chip(i.impact === 'info' ? 'info' : i.impact, IMPACT[i.impact]), ' ', i.link ? link(i.link, i.title || 'Incident') : i.title,
+      h('div', { class: 'muted small' }, [i.products?.length && i.products.join(', '), i.started && `since ${when(i.started)}`, i.updated && i.updated !== i.started && `updated ${when(i.updated)}`].filter(Boolean).join(' · ')),
+      i.detail ? h('div', { class: 'small' }, i.detail) : null))) : null,
+    h('p', { class: 'small' }, link(p.page, `Open the ${p.name} status page`)));
+  const bad = d.providers.filter(p => p.grade === 'warn' || p.grade === 'bad').length;
+  return [head,
+    h('div', { class: 'statline' },
+      h('div', {}, h('span', { class: 'n' }, d.providers.filter(p => p.grade === 'ok').length), h('span', { class: 'l' }, 'Operational')),
+      h('div', {}, h('span', { class: 'n' }, bad), h('span', { class: 'l' }, 'With incidents')),
+      h('div', {}, h('span', { class: 'n' }, d.providers.filter(p => p.grade === 'unknown').length), h('span', { class: 'l' }, 'Not checked'))),
+    h('div', { class: 'grid-2' }, d.providers.map(card)),
+    h('p', { class: 'muted small' }, `Checked ${when(d.checkedAt)}. HeatMap 360 only reports what each provider publishes; it does not change anything.`)];
+}
+
+// ---------- Options ----------
+function viewOptions() {
+  const opts = { speed: true, saveOnly: false, wait: 15 };
+  const out = h('pre', { class: 'code' });
+  const render = () => {
+    const args = [opts.saveOnly && '-SaveOnly', !opts.speed && '-SkipSpeedTest', !opts.saveOnly && opts.wait !== 15 && `-WaitMinutes ${opts.wait}`].filter(Boolean);
+    out.textContent = ['powershell -NoProfile -ExecutionPolicy Bypass -File .\\Invoke-HeatMapScan.ps1', ...args].join(' ');
+  };
+  const box = (key, label, help) => h('label', { class: 'option' }, h('input', { type: 'checkbox', checked: opts[key], onchange: e => { opts[key] = e.target.checked; render(); } }), h('span', {}, h('strong', {}, label), h('span', { class: 'muted small' }, help)));
+  render();
+  const what = [
+    ['Windows and updates', 'Version, build, installed updates, end of support, known issues Microsoft reports for the build.'],
+    ['Apps', 'Installed programs; winget package IDs to look up newer versions.'],
+    ['Hardware and firmware', 'Make, model, BIOS (HP and Lenovo looked up with the vendor), motherboard, CPU, memory, drivers.'],
+    ['Disk and battery health', 'Disk wear, temperature and uncorrected errors (run as administrator); battery capacity versus new.'],
+    ['Event log', 'Counts of critical and error events per Windows component, last 7 days. Never the message text.'],
+    ['Network adapters', 'Link speed, duplex, drivers, power and offload settings, Wi-Fi signal. No addresses or network names.'],
+    ['Network health', 'Ping to the router, connection time and DNS lookup time, and download/upload speed against Cloudflare’s public speed test (about 35 MB).'],
+    ['Security', 'Defender, BitLocker, Secure Boot, TPM, firewall; exploited-in-the-wild candidates from CISA.'],
+  ];
   return [
-    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Actions'), h('p', {}, 'On-demand tools for admins. These are being designed and will appear here as they are built.'))),
-    me.elevated ? null : h('p', { class: 'callout warn' }, 'Actions will need an active HeatMap 360 PIM group membership.'),
-    h('div', { class: 'grid-3' },
-      soon('Vulnerability scan', 'Run an on-demand vulnerability check on a scanned computer.'),
-      soon('Hardware diagnostics', 'Check disks, memory and batteries, and look up firmware updates with each vendor.'),
-      soon('Network health', 'Measure internet speed and the link between the computer and its gateway, and check the network adapter settings.')),
+    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Options'), h('p', {}, 'Choose what the scanner does, then run the command on the computer. HeatMap 360 reports what it finds; it never changes a computer.'))),
+    h('div', { class: 'grid-2' },
+      panel('Scanner options', null,
+        h('div', { class: 'stack' },
+          box('speed', 'Measure internet speed', 'Downloads and uploads about 35 MB to Cloudflare’s speed test. Turn off on metered connections.'),
+          box('saveOnly', 'Save only, do not send', 'Writes the exact data to Documents\\HeatMap360 so you can read it first.'),
+          h('label', { class: 'option' }, h('span', {}, h('strong', {}, 'Wait for results (minutes)'), h('span', { class: 'muted small' }, 'How long the scanner waits for the PDF before telling you how to fetch it later.')),
+            h('input', { type: 'number', min: 1, max: 120, value: opts.wait, class: 'num-input', oninput: e => { opts.wait = Math.min(120, Math.max(1, Number(e.target.value) || 15)); render(); } }))),
+        h('h3', {}, 'Command'), out,
+        h('div', { class: 'row' }, h('button', { class: 'btn sm', onclick: () => navigator.clipboard?.writeText(out.textContent).then(() => toast('Copied')) }, 'Copy'),
+          h('a', { class: 'btn sm primary', href: me.scannerUrl, download: 'Invoke-HeatMapScan.ps1' }, 'Download the scanner'))),
+      panel('What a scan checks', null, h('dl', { class: 'kv' }, what.map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])))),
+    h('section', { class: 'panel stack' }, h('div', { class: 'row' }, h('h2', {}, 'On-demand vulnerability check'), chip('info', 'Planned')),
+      h('p', { class: 'muted' }, 'Check a scanned computer’s installed versions against published vulnerabilities on request. Report only.'), h('button', { class: 'btn', disabled: true }, 'Not available yet')),
   ];
 }
 
@@ -177,8 +284,8 @@ function viewScanner() {
           h('pre', { class: 'code' }, cmd), h('button', { class: 'btn sm', onclick: () => navigator.clipboard?.writeText(cmd).then(() => toast('Copied')) }, 'Copy')),
         h('li', {}, h('strong', {}, 'Get your PDF'), h('p', { class: 'muted small' }, 'The scanner waits for the results and saves them in Documents\\HeatMap360. If they take longer, it tells you how to fetch them later.')))),
       panel('What is sent', null,
-        h('p', {}, h('strong', {}, 'Sent: '), 'Windows version, build and installed updates; installed programs and versions; computer make and model, BIOS, motherboard, processor, memory, disks and device drivers; Defender, BitLocker, Secure Boot, TPM and firewall status.'),
-        h('p', {}, h('strong', {}, 'Never sent: '), 'computer name, user names, domain, IP or MAC addresses, serial numbers, files or documents.'),
+        h('p', {}, h('strong', {}, 'Sent: '), 'Windows version, build and installed updates; installed programs and versions; computer make and model, BIOS, motherboard, processor, memory, disks and device drivers; Defender, BitLocker, Secure Boot, TPM and firewall status; how many critical and error events Windows logged in the last 7 days (counts only); network adapter models, link speed, drivers and settings, and Wi-Fi signal strength; disk and battery health; ping time to your router, DNS time and internet speed (Cloudflare speed test, about 35 MB; see Options to turn it off).'),
+        h('p', {}, h('strong', {}, 'Never sent: '), 'computer name, user names, domain, IP or MAC addresses, Wi-Fi network names, serial numbers, event log messages, files or documents.'),
         h('p', { class: 'muted small' }, 'Want to read it first? Add ', h('code', {}, '-SaveOnly'), ' and the scanner writes the exact data to a file without sending anything.'))),
   ];
 }
@@ -187,10 +294,10 @@ function viewScanner() {
 async function route() {
   const hash = location.hash.slice(1) || (me?.elevated ? 'scans' : 'scanner');
   const [name, arg] = hash.split('/');
-  document.querySelectorAll('.nav-item').forEach(a => a.setAttribute('aria-current', a.dataset.route === (name === 'scan' ? 'scans' : name) ? 'page' : 'false'));
+  document.querySelectorAll('.nav-item').forEach(a => a.setAttribute('aria-current', a.dataset.route === (name === 'scan' ? 'scans' : name === 'actions' ? 'options' : name) ? 'page' : 'false'));
   const view = $('#view');
   try {
-    const content = name === 'scan' ? await viewScan(arg) : name === 'actions' ? viewActions() : name === 'scanner' ? viewScanner() : await viewScans();
+    const content = name === 'scan' ? await viewScan(arg) : name === 'options' || name === 'actions' ? viewOptions() : name === 'services' ? await viewServices() : name === 'scanner' ? viewScanner() : await viewScans();
     view.replaceChildren(...[content].flat().filter(Boolean));
   } catch (e) {
     if (e.status === 401 || e.status === 403) { await boot(false); return; }

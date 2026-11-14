@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shape of an HP Image Assistant reference file (trimmed, made-up softpaqs). -->
+<ImagePal>
+  <SystemInfo><System><SystemID>8A5B</SystemID></System></SystemInfo>
+  <Solutions>
+    <UpdateInfo>
+      <Id>sp100001</Id><Name>Example Network Driver</Name><Category>Driver - Network</Category><Version>2.0.0.1</Version>
+      <ReleaseDate>2026-08-01</ReleaseDate><Url>ftp.hp.com/pub/softpaq/sp100001-100500/sp100001.exe</Url>
+    </UpdateInfo>
+    <UpdateInfo>
+      <Id>sp100002</Id><Name>HP Example Laptop System BIOS (T70)</Name><Category>BIOS</Category><Version>01.18.00</Version>
+      <ReleaseDate>2026-03-20</ReleaseDate><Url>ftp.hp.com/pub/softpaq/sp100001-100500/sp100002.exe</Url>
+      <ReleaseNotesUrl>ftp.hp.com/pub/softpaq/sp100001-100500/sp100002.html</ReleaseNotesUrl>
+    </UpdateInfo>
+    <UpdateInfo>
+      <Id>sp100003</Id><Name>HP Example Laptop System BIOS (T70)</Name><Category>BIOS - Critical</Category><Version>01.21.00</Version>
+      <ReleaseDate>2026-09-15</ReleaseDate><Url>ftp.hp.com/pub/softpaq/sp100001-100500/sp100003.exe</Url>
+      <ReleaseNotesUrl>ftp.hp.com/pub/softpaq/sp100001-100500/sp100003.html</ReleaseNotesUrl>
+    </UpdateInfo>
+  </Solutions>
+</ImagePal>

@@ -1,4 +1,4 @@
-// Managed identity tokens (user-assigned id-hm360). No secret, certificate or key is stored anywhere.
+// Managed identity tokens (user-assigned id-heatmap360). No secret, certificate or key is stored anywhere.
 // Container Apps injects IDENTITY_ENDPOINT and IDENTITY_HEADER.
 export function createManagedIdentity({ clientId, env = process.env, fetcher = fetch, now = () => Date.now() }) {
   const cache = new Map();

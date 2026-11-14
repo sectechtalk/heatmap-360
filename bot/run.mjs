@@ -17,13 +17,16 @@ import { createFeeds } from './kev.mjs';
 import { checkInventory } from '../server/schema.mjs';
 
 const ID = /^[0-9]{14}-[0-9a-f]{8}$/;
-const UA = 'HeatMap360-bot/1.0 (+https://github.com/sectechtalk/heatmap-360)';
+const UA = 'HeatMap360-bot/1.0 (+https://github.com/<your-account>/heatmap-360)';
 
-async function page(url, fetchImpl) {
-  const r = await fetchImpl(url, { headers: { 'user-agent': UA, accept: 'text/html' }, signal: AbortSignal.timeout(30_000) });
+async function page(url, fetchImpl, { missingOk = false } = {}) {
+  const r = await fetchImpl(url, { headers: { 'user-agent': UA, accept: 'text/html, application/xml, text/xml' }, signal: AbortSignal.timeout(30_000) });
+  if (missingOk && r.status === 404) return null;
   if (!r.ok) throw new Error(`${new URL(url).hostname} returned HTTP ${r.status}`);
   return r.text();
 }
+// Vendor firmware catalogs are fetched only from these hosts (bot/firmware.mjs builds the URLs).
+const VENDOR_HOSTS = new Set(['hpia.hpcloud.hp.com', 'download.lenovo.com']);
 
 export function createSources({ fetchImpl = (...a) => fetch(...a), cacheDir, githubToken = null }) {
   const memo = new Map();
@@ -37,6 +40,11 @@ export function createSources({ fetchImpl = (...a) => fetch(...a), cacheDir, git
     }),
     knownIssuesPage: url => once(url, () => page(url, fetchImpl)),
     wingetLatest: createWingetLookup({ fetchImpl, token: githubToken }),
+    vendorFile: url => {
+      const u = new URL(url);
+      if (u.protocol !== 'https:' || !VENDOR_HOSTS.has(u.hostname)) return Promise.reject(new Error(`${u.hostname} is not an allowed vendor source`));
+      return once(url, () => page(url, fetchImpl, { missingOk: true }));
+    },
     kev: () => once('kev', async () => { const s = await feeds.refresh(); if (!s.kev) throw new Error(s.lastError || 'KEV catalog unavailable'); return s; }),
   };
 }

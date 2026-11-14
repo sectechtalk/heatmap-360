@@ -11,6 +11,7 @@ import { checkInventory } from './schema.mjs';
 import { createLimiter } from './ratelimit.mjs';
 import { createLocalStore, createGitHubStore } from './datastore.mjs';
 import { renderReport } from './report.mjs';
+import { createServiceHealth } from './services.mjs';
 import { SessionStore, parseCookies, cookieHeader, SESSION_COOKIE, SESSION_TTL, PIM_GROUPS_URL, createAuth } from './auth.mjs';
 import { createManagedIdentity } from './identity.mjs';
 
@@ -35,9 +36,12 @@ export function summarize(r) {
     build: inv.os ? `${inv.os.build}.${inv.os.ubr ?? 0}` : null, summary: r.summary };
 }
 
-export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript } = {}) {
+export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript, serviceHealth } = {}) {
   store ??= config.data.kind === 'github' ? createGitHubStore(config.data) : createLocalStore(config.data.dir);
-  if (auth === undefined && config.entra) auth = createAuth({ config: config.entra, miToken: createManagedIdentity({ clientId: config.entra.miClientId }) });
+  // One managed identity (id-heatmap360) for sign-in and for Microsoft 365 service health. Only present when hosted.
+  const miToken = config.entra && process.env.IDENTITY_ENDPOINT ? createManagedIdentity({ clientId: config.entra.miClientId }) : null;
+  if (auth === undefined && config.entra) auth = createAuth({ config: config.entra, miToken: miToken || createManagedIdentity({ clientId: config.entra.miClientId }) });
+  serviceHealth ??= createServiceHealth({ graphToken: miToken });
   clientScript ??= readFileSync(path.join(root, 'client', 'Invoke-HeatMapScan.ps1'), 'utf8');
   const limiter = createLimiter({ now, rules: [{ windowMs: 600_000, limit: config.limits.perIp10Min }, { windowMs: 86_400_000, limit: config.limits.perIpDay }] });
   const globalLimiter = createLimiter({ now, rules: [{ windowMs: 86_400_000, limit: config.limits.globalDay }] });
@@ -165,6 +169,10 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
       const { tokenHash, ...safe } = r;
       res.json(safe);
     } catch (e) { next(e); }
+  });
+  // Public status feeds of online services (Azure, AWS, Google, GitHub, Cloudflare), cached for 5 minutes.
+  app.get('/api/admin/services', requireAdmin, async (req, res, next) => {
+    try { res.json(await serviceHealth()); } catch (e) { next(e); }
   });
   app.get('/api/admin/scans/:id/report.pdf', requireAdmin, async (req, res, next) => {
     try {

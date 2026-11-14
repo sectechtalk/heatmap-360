@@ -99,6 +99,11 @@ test('admin pages need sign-in + elevation; dev mode lists and shows scans', asy
   } finally { b.server.close(); }
   assert.equal(loadConfig({ HM360_DEV_ADMIN: '1', NODE_ENV: 'production' }).devAdmin, false);
   assert.equal(loadConfig({ HM360_DEV_ADMIN: '1', HM360_BIND: '0.0.0.0' }).devAdmin, false);
+  const box = { HM360_DEV_ADMIN: '1', HM360_BIND: '0.0.0.0', HM360_DEV_ADMIN_CONTAINER: '1' };
+  assert.equal(loadConfig(box).devAdmin, true);
+  assert.equal(loadConfig({ ...box, NODE_ENV: 'production' }).devAdmin, false);
+  assert.equal(loadConfig({ ...box, HM360_DATA_REPO: 'contoso/data' }).devAdmin, false);
+  assert.equal(loadConfig({ ...box, HM360_TENANT_ID: 't', HM360_CLIENT_ID: 'c' }).devAdmin, false);
 });
 
 test('scanner download is pre-filled with this server address; pages carry CSP', async () => {

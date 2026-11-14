@@ -11,7 +11,7 @@
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "dev": "node --watch --env-file-if-exists=.env server/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server/index.mjs && node --check server/auth.mjs && node --check server/datastore.mjs && node --check server/report.mjs && node --check bot/run.mjs && node --check bot/analyze.mjs && node --check public/app.js"
+    "check": "node --check server/index.mjs && node --check server/auth.mjs && node --check server/datastore.mjs && node --check server/report.mjs && node --check bot/run.mjs && node --check bot/analyze.mjs && node --check bot/machine.mjs && node --check bot/firmware.mjs && node --check bot/nethealth.mjs && node --check server/services.mjs && node --check public/app.js"
   },
   "dependencies": {
     "@azure/msal-node": "^3.8.0",

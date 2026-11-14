@@ -1,12 +1,18 @@
 # Local run of the web app against a local data folder (no GitHub, no Entra). For the hosted setup see docs/SETUP.md.
+# Local dev mode: the browser is treated as an elevated admin with no sign-in. That is only safe because the port is
+# published on the host's loopback (127.0.0.1) and nothing else; never change that to 0.0.0.0 or a LAN address.
 services:
   hm360:
     build: .
     image: hm360:local
     container_name: hm360
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3460:3460"
     environment:
+      NODE_ENV: development
+      HM360_DEV_ADMIN: "1"
+      HM360_DEV_ADMIN_CONTAINER: "1"
       HM360_DATA_DIR: /data/exchange
       HM360_PUBLIC_URL: http://localhost:3460
     volumes:

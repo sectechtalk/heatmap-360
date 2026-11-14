@@ -13,7 +13,7 @@ sign-in (no client secret), image on GitHub Container Registry. Target cost $0.
 
 ## 2. The bot on the admin desktop
 
-1. `git clone https://github.com/sectechtalk/heatmap-360 C:\src\heatmap-360`, then `npm ci` there (Node 22+).
+1. `git clone https://github.com/<your-account>/heatmap-360 C:\src\heatmap-360`, then `npm ci` there (Node 22+).
 2. `hm-360-data` → Settings → Actions → Runners → New self-hosted runner (Windows). Follow GitHub's steps, add the
    label `hm360`, and install it as a service.
 3. Set the machine environment variable `HM360_BOT_DIR=C:\src\heatmap-360` and restart the runner service.
@@ -25,15 +25,15 @@ When the desktop is off, uploads wait in `inbox/`; the hourly schedule and the n
 
 1. Security group **HeatMap 360 Admins** (role-assignable not needed). Turn on PIM for Groups for it and make admins
    **eligible** members, with the activation length you want. Note the group object ID.
-2. App registration **hm360-web**, single tenant. Redirect URI (Web): `https://<app fqdn>/auth/callback` (and
+2. App registration **heatmap360-web**, single tenant. Redirect URI (Web): `https://<app fqdn>/auth/callback` (and
    `http://localhost:3460/auth/callback` for testing). API permission: Microsoft Graph delegated `User.Read` only.
-3. User-assigned managed identity **id-hm360**. On hm360-web → Certificates & secrets → Federated credentials → add
-   "Managed identity" → id-hm360 (audience `api://AzureADTokenExchange`). No client secret.
+3. User-assigned managed identity **id-heatmap360**. On heatmap360-web → Certificates & secrets → Federated credentials → add
+   "Managed identity" → id-heatmap360 (audience `api://AzureADTokenExchange`). No client secret.
 
 ## 4. Container Apps
 
-Container app `app-hm360` with id-hm360 assigned, external HTTPS ingress on port 3460, 0-1 replicas, 0.25 vCPU / 0.5 GiB,
-image `ghcr.io/sectechtalk/heatmap-360:<tag>` built from this repo's Dockerfile.
+Container app `app-heatmap360` with id-heatmap360 assigned, external HTTPS ingress on port 3460, 0-1 replicas, 0.25 vCPU / 0.5 GiB,
+image `ghcr.io/<your-account>/heatmap-360:<tag>` built from this repo's Dockerfile.
 
 | Variable | Value |
 |---|---|
@@ -41,10 +41,25 @@ image `ghcr.io/sectechtalk/heatmap-360:<tag>` built from this repo's Dockerfile.
 | `HM360_DATA_REPO` | `<your-account>/hm-360-data` |
 | `HM360_GITHUB_TOKEN` | secret ref `hm360-github-token` |
 | `HM360_TENANT_ID` | tenant ID |
-| `HM360_CLIENT_ID` | hm360-web application (client) ID |
-| `HM360_MI_CLIENT_ID` | id-hm360 client ID |
+| `HM360_CLIENT_ID` | heatmap360-web application (client) ID |
+| `HM360_MI_CLIENT_ID` | id-heatmap360 client ID |
 | `HM360_ADMIN_GROUP_ID` | HeatMap 360 Admins object ID |
 | `HM360_UPLOADS_PER_10MIN`, `HM360_UPLOADS_PER_DAY`, `HM360_UPLOADS_GLOBAL_DAY` | optional, defaults 5 / 20 / 500 |
 
 Check: `https://<app fqdn>/api/health` returns `{"ok":true}`; **Get the scanner** downloads a script with your address
 filled in; signing in without an active PIM activation shows "Elevate to see scan results".
+
+## Microsoft 365 service health (optional)
+
+The Service health page reads Microsoft 365 issues from Microsoft Graph with the managed identity **id-heatmap360**. Give
+that identity the Graph **application** permission `ServiceHealth.Read.All` (a managed identity has no API
+permissions page, so assign the app role with Microsoft Graph PowerShell):
+
+```powershell
+Connect-MgGraph -Scopes AppRoleAssignment.ReadWrite.All, Application.Read.All
+$mi    = Get-MgServicePrincipal -Filter "displayName eq 'id-heatmap360'"
+$graph = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi.Id -PrincipalId $mi.Id -ResourceId $graph.Id -AppRoleId 79c261e0-fe76-4144-aad5-bdc68fbe4037
+```
+
+The assignment is the admin consent. Until it exists, Microsoft 365 shows "Not connected" on the page.
