@@ -106,6 +106,38 @@ test('admin pages need sign-in + elevation; dev mode lists and shows scans', asy
   assert.equal(loadConfig({ ...box, HM360_TENANT_ID: 't', HM360_CLIENT_ID: 'c' }).devAdmin, false);
 });
 
+test('sign-out works without a live session; a failed elevation check is reported, not shown as "not elevated"', async () => {
+  let mode = 'member';
+  const fakeAuth = {
+    beginSignIn: async () => '/signed-in-elsewhere',
+    completeSignIn: async s => { s.user = { oid: '0', upn: 'admin@contoso.example', name: 'Admin' }; },
+    elevated: async () => { if (mode === 'expired') throw Object.assign(new Error('Session expired'), { status: 401 }); if (mode === 'down') throw new Error('Graph 503'); return true; },
+    signOut: async () => {},
+  };
+  const { server, base } = await start({}, { auth: fakeAuth });
+  try {
+    // no session at all (app restarted after scaling to zero): still clears the cookie
+    const bare = await fetch(`${base}/auth/signout`, { method: 'POST' });
+    assert.equal(bare.status, 200);
+    assert.match(bare.headers.get('set-cookie'), /Max-Age=0/);
+    const r = await fetch(`${base}/auth/signin`, { redirect: 'manual' });
+    const cookie = r.headers.get('set-cookie').split(';')[0];
+    await fetch(`${base}/auth/callback?code=x`, { headers: { cookie }, redirect: 'manual' });
+    const me = async () => (await fetch(`${base}/api/me`, { headers: { cookie } })).json();
+    assert.deepEqual([(await me()).elevated, (await me()).elevationError], [true, null]);
+    mode = 'down';
+    const down = await me();
+    assert.deepEqual([down.signedIn, down.elevated, down.elevationError], [true, false, 'check']);
+    // a live session still needs the CSRF token
+    assert.equal((await fetch(`${base}/auth/signout`, { method: 'POST', headers: { cookie } })).status, 403);
+    mode = 'expired';
+    const expired = await me();
+    assert.deepEqual([expired.signedIn, expired.elevationError], [false, 'signin']);
+    assert.equal((await fetch(`${base}/auth/signout`, { method: 'POST', headers: { cookie, 'x-csrf': expired.csrf } })).status, 200);
+    assert.equal((await me()).csrf, null, 'session destroyed');
+  } finally { server.close(); }
+});
+
 test('scanner download is pre-filled with this server address; pages carry CSP', async () => {
   const { server, base } = await start();
   try {
@@ -119,4 +151,54 @@ test('scanner download is pre-filled with this server address; pages carry CSP',
 
 test('summarize hides inventory detail', () => {
   assert.deepEqual(summarize({ id: 'x', rejected: 'bad', receivedAt: 'r' }).state, 'rejected');
+});
+
+test('settings: only Project 360 Admins read or change where the findings table lives', async () => {
+  let project = false;
+  const fakeAuth = {
+    beginSignIn: async () => '/x', signOut: async () => {},
+    completeSignIn: async s => { s.user = { oid: '0', upn: 'admin@contoso.example', name: 'Admin' }; },
+    elevated: async () => true,
+    projectAdmin: async () => project,
+  };
+  const { dir, server, base } = await start({}, { auth: fakeAuth });
+  try {
+    assert.equal((await fetch(`${base}/api/admin/settings`)).status, 401);
+    const r = await fetch(`${base}/auth/signin`, { redirect: 'manual' });
+    const cookie = r.headers.get('set-cookie').split(';')[0];
+    await fetch(`${base}/auth/callback?code=x`, { headers: { cookie }, redirect: 'manual' });
+    let me = await (await fetch(`${base}/api/me`, { headers: { cookie } })).json();
+    assert.deepEqual([me.elevated, me.projectAdmin], [true, false]);
+    assert.equal((await fetch(`${base}/api/admin/settings`, { headers: { cookie } })).status, 403, 'HeatMap admin alone is not enough');
+    project = true;
+    me = await (await fetch(`${base}/api/me`, { headers: { cookie } })).json();
+    assert.equal(me.projectAdmin, true);
+    const put = (body, csrf = me.csrf) => fetch(`${base}/api/admin/settings/findings`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json', ...(csrf ? { 'x-csrf': csrf } : {}) }, body: JSON.stringify(body) });
+    assert.equal((await put({ account: 'stheatmap360new' }, null)).status, 403, 'CSRF token required');
+    assert.equal((await put({ account: 'Bad/Name' })).status, 400);
+    assert.equal((await put({ account: 'stheatmap360new', table: '1x' })).status, 400);
+    assert.equal((await put({ account: 'stheatmap360new', key: 'secret' })).status, 400, 'nothing but names');
+    const ok = await put({ account: 'stheatmap360new', table: 'findings2' });
+    assert.equal(ok.status, 200);
+    const saved = JSON.parse(await readFile(path.join(dir, 'settings', 'findings.json'), 'utf8'));
+    assert.deepEqual(saved.findings, { account: 'stheatmap360new', table: 'findings2' });
+    assert.equal(saved.updatedBy, 'admin@contoso.example');
+    const got = await (await fetch(`${base}/api/admin/settings`, { headers: { cookie } })).json();
+    assert.equal(got.findings.account, 'stheatmap360new');
+  } finally { server.close(); }
+});
+
+test('GitHub data store: replacing the settings file sends its current sha; other paths are refused', async () => {
+  const { createGitHubStore } = await import('../server/datastore.mjs');
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+    if (!init.method) return Response.json({ sha: 'abc123' });
+    return Response.json({});
+  };
+  const s = createGitHubStore({ owner: 'contoso', repo: 'data', token: 't', fetchImpl });
+  await s.put('settings/findings.json', { schema: 'hm360.settings/1' });
+  assert.equal(calls.at(-1).method, 'PUT');
+  assert.equal(calls.at(-1).body.sha, 'abc123');
+  await assert.rejects(s.put('settings/other.json', {}), /refusing/);
 });

@@ -21,6 +21,20 @@ sign-in (no client secret), image on GitHub Container Registry. Target cost $0.
 
 When the desktop is off, uploads wait in `inbox/`; the hourly schedule and the next push pick them up.
 
+### Findings store and lookup job (admin desktop)
+
+The findings table lives in an Azure Table Storage account that is created by hand in the Azure portal or CLI (it is
+deliberately not scripted here). The account the job runs as needs the role **Storage Table Data Contributor** on it.
+Which account and table to use is set on the **Settings** page by a Project 360 Admin (saved as
+`settings/findings.json` in the data store), so the storage can be moved later without a code change.
+
+On the desktop, sign in once with `az login`, then run (the job creates the table inside the account if it is missing):
+
+    node C:\src\heatmap-360\bot\findings.mjs --repo C:\src\heatmap-360\data\exchange
+
+`--account <name>` overrides the Settings page for one run. Add `--repo <hm-360-data checkout>` to include production
+scans. `--dry-run` uses memory only. To run it every hour, add a Task Scheduler task with the same command.
+
 ## 3. Entra
 
 1. Security group **HeatMap 360 Admins** (role-assignable not needed). Turn on PIM for Groups for it and make admins
@@ -44,6 +58,7 @@ image `ghcr.io/<your-account>/heatmap-360:<tag>` built from this repo's Dockerfi
 | `HM360_CLIENT_ID` | heatmap360-web application (client) ID |
 | `HM360_MI_CLIENT_ID` | id-heatmap360 client ID |
 | `HM360_ADMIN_GROUP_ID` | HeatMap 360 Admins object ID |
+| `HM360_PROJECT_ADMIN_GROUP_ID` | Project 360 Admin object ID (Settings page; optional, unset = nobody can change settings) |
 | `HM360_UPLOADS_PER_10MIN`, `HM360_UPLOADS_PER_DAY`, `HM360_UPLOADS_GLOBAL_DAY` | optional, defaults 5 / 20 / 500 |
 
 Check: `https://<app fqdn>/api/health` returns `{"ok":true}`; **Get the scanner** downloads a script with your address

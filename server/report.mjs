@@ -110,10 +110,30 @@ export function renderReport(result, { now = new Date() } = {}) {
   }
 
   const ex = result.exploited || {};
-  if (ex.candidates?.length) {
-    h2('Vulnerabilities exploited in the wild that may apply (CISA KEV)');
-    p('These are candidates: the catalog names products, not versions. Check the installed version against each CVE.', C.muted, 9);
-    table(['CVE', 'Product', 'Why', 'CISA due'], ex.candidates.slice(0, 25).map(c => [c.cveID, c.app || `${c.vendor} ${c.product}`, c.reason, c.dueDate || '']), [2, 3, 4, 1.5]);
+  const open = ex.affected ? [...ex.affected, ...ex.unverified] : (ex.candidates || []);
+  if (ex.status === 'checked' || open.length) {
+    h2('Vulnerabilities exploited in the wild (CISA KEV)');
+    if (ex.reason) badge(s.grade.exploited, ex.reason);
+    if (!ex.affected && open.length) p('Candidates: this result was made before the version check was added. Check the installed version against each CVE.', C.muted, 9);
+    const VERDICT = { affected: 'Vulnerable version', unverified: 'Check version', patched: 'Patched' };
+    if (open.length) table(['CVE', 'Installed', 'For this PC', 'Fixed in', 'CISA due'], open.slice(0, 40).map(c => [c.cveID, c.app ? `${c.app}${c.version ? ` ${c.version}` : ''}` : `${c.vendor} ${c.product}`,
+      VERDICT[c.verdict] || 'Check version', c.fixedIn || '', c.dueDate || '']), [2, 3.5, 2, 2, 1.5]);
+    if (ex.patched?.length) p(`${ex.patched.length} other matches are already patched versions.`, C.muted, 9);
+    p('Versions are compared with the affected ranges in each official CVE record (cve.org).', C.muted, 8);
+  }
+
+  const ai = result.appIssues;
+  if (ai) {
+    h2('Known issues in apps (publisher release notes)');
+    if (ai.status !== 'checked') p(ai.reason || ai.error || 'Not checked', C.muted);
+    else {
+      badge(ai.grade, ai.reason);
+      for (const i of ai.issues.slice(0, 20)) {
+        p(`${i.id} ${i.version} (${i.which === 'installed' ? 'installed' : 'available update'}):`, C.ink, 9);
+        for (const t of i.items.slice(0, 5)) p(`• ${t}`, C.ink, 8.5);
+        p(`Source: ${i.source}`, C.muted, 8);
+      }
+    }
   }
 
   h2('Hardware');
@@ -134,7 +154,7 @@ export function renderReport(result, { now = new Date() } = {}) {
   if (hw.devices?.length) table(['Device', 'Class', 'Driver', 'Driver date'], hw.devices.slice(0, 60).map(d => [d.name, d.class, d.driverVersion, d.driverDate || '']), [5, 1.5, 2, 1.5]);
 
   doc.moveDown(1);
-  p('HeatMap 360 reads only official vendor sources (Microsoft release health, the winget catalog, CISA, and HP and Lenovo update catalogs). Lookups that fail are shown as "Not checked" instead of guessed. The scan contains no computer name, user name, address, network name, serial number or event message.', C.muted, 8);
+  p('HeatMap 360 reads only official sources (Microsoft release health, the winget catalog and publisher release notes, CISA, CVE records, and HP and Lenovo update catalogs). Lookups that fail are shown as "Not checked" instead of guessed. The scan contains no computer name, user name, address, network name, serial number or event message.', C.muted, 8);
   doc.end();
   return done;
 }

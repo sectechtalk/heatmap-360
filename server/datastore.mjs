@@ -4,10 +4,12 @@
 //
 //   inbox/<id>.json     upload record { schema: hm360.upload/1, id, receivedAt, tokenHash, inventory }
 //   results/<id>.json   bot output    { schema: hm360.result/1, ... }  (the bot deletes the inbox file)
+//   settings/findings.json  where the findings table lives { schema: hm360.settings/1, findings: { account, table } },
+//                       written by Project 360 Admins on the Settings page, read by bot/findings.mjs
 import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 
-const SAFE = /^(inbox|results)\/[0-9]{14}-[0-9a-f]{8}\.json$/;
+const SAFE = /^((inbox|results)\/[0-9]{14}-[0-9a-f]{8}|settings\/findings)\.json$/;
 function check(p) { if (!SAFE.test(p)) throw new Error(`refusing data path ${p}`); return p; }
 
 export function createLocalStore(dir) {
@@ -46,6 +48,11 @@ export function createGitHubStore({ owner, repo, branch = 'main', token, fetchIm
     },
     async put(p, value, message = `hm360: ${p}`) {
       const body = { message, branch, content: Buffer.from(JSON.stringify(value, null, 1)).toString('base64') };
+      // Replacing a file (only settings/ ever is) needs its current sha.
+      if (p.startsWith('settings/')) {
+        const cur = await call(`${base}/${check(p)}?ref=${encodeURIComponent(branch)}`, { headers: headers({ accept: 'application/vnd.github+json' }) });
+        if (cur) body.sha = (await cur.json()).sha;
+      }
       const r = await call(`${base}/${check(p)}`, { method: 'PUT', headers: headers({ accept: 'application/vnd.github+json', 'content-type': 'application/json' }), body: JSON.stringify(body) });
       if (!r) throw new Error('GitHub data store: repository or branch not found');
     },

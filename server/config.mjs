@@ -14,7 +14,7 @@ export function loadConfig(env = process.env, root = process.cwd()) {
       : { kind: 'local', dir: path.resolve(env.HM360_DATA_DIR || path.join(root, 'data', 'exchange')) },
     entra: env.HM360_TENANT_ID && env.HM360_CLIENT_ID ? {
       tenantId: env.HM360_TENANT_ID, clientId: env.HM360_CLIENT_ID, miClientId: env.HM360_MI_CLIENT_ID || '',
-      adminGroupId: env.HM360_ADMIN_GROUP_ID || '', redirectUri: env.HM360_REDIRECT_URI || `${publicUrl}/auth/callback`,
+      adminGroupId: env.HM360_ADMIN_GROUP_ID || '', projectAdminGroupId: env.HM360_PROJECT_ADMIN_GROUP_ID || '', redirectUri: env.HM360_REDIRECT_URI || `${publicUrl}/auth/callback`,
     } : null,
     // Local development only: treat the browser as an elevated admin. Refused in production and when Entra or the GitHub
     // data repo is configured. Needs a 127.0.0.1 bind, or HM360_DEV_ADMIN_CONTAINER=1 inside a local container whose

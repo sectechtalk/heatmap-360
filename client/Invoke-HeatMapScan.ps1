@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-  HeatMap 360 scanner: inventories THIS Windows computer, removes personal data, sends it to HeatMap 360 and saves
-  the results as a PDF when they are ready. Read-only: it never installs, updates or changes anything.
+  HeatMap 360 scanner: inventories THIS Windows computer and removes personal data (step 1, nothing is sent), then
+  uploads the saved file to HeatMap 360 and saves the results as a PDF when they are ready (step 2, -Upload).
+  Read-only: it never installs, updates or changes anything.
 .DESCRIPTION
   What is collected: Windows version, build and installed updates; installed programs and their versions (and winget
   package IDs, so newer versions can be looked up); hardware make, model, BIOS, motherboard, CPU, memory, disks and
@@ -15,26 +16,45 @@
   What is NOT collected: computer name, user names, domain, IP or MAC addresses, Wi-Fi network names, serial
   numbers, event log messages, the gateway's or any other address, file paths or documents. The computer is identified only by a one-way hash of its Windows MachineGuid, so two scans of the same
   computer can be compared without revealing which computer it is.
-  Use -SaveOnly to write the exact data to a file and read it before anything is sent.
+  Two steps: a scan only saves the anonymized file (Documents\HeatMap360\inventory-<time>.json), so you can read it
+  first. Upload it with the Upload button on the HeatMap 360 "Get the scanner" page, or run this script with -Upload.
+  -ScanAndUpload does both in one go.
   Works in Windows PowerShell 5.1 and PowerShell 7. Run it elevated to include BitLocker and Secure Boot.
 .EXAMPLE
-  .\Invoke-HeatMapScan.ps1                         # scan, upload, wait for the PDF
-  .\Invoke-HeatMapScan.ps1 -SaveOnly               # scan and save the JSON only; nothing is sent
+  .\Invoke-HeatMapScan.ps1                         # step 1: scan and save the anonymized file; nothing is sent
+  .\Invoke-HeatMapScan.ps1 -Upload                 # step 2: upload the newest saved file and wait for the PDF
+  .\Invoke-HeatMapScan.ps1 -Upload -Path <file>    # step 2 for a specific saved file
+  .\Invoke-HeatMapScan.ps1 -ScanAndUpload          # both steps in one go
   .\Invoke-HeatMapScan.ps1 -SkipSpeedTest          # leave out the download/upload speed test (about 35 MB)
-  .\Invoke-HeatMapScan.ps1 -Resume <scan id>       # fetch the PDF of an earlier scan
+  .\Invoke-HeatMapScan.ps1 -Resume <scan id>       # fetch the PDF of an earlier upload
 #>
 [CmdletBinding(DefaultParameterSetName = 'Scan')]
 param(
     [string]$Server = '__HEATMAP_URL__',
-    [Parameter(ParameterSetName = 'Scan')][switch]$SaveOnly,
+    [Parameter(ParameterSetName = 'Scan')][switch]$ScanAndUpload,
+    [Parameter(ParameterSetName = 'Scan')][switch]$SaveOnly,   # kept for older commands: scanning only is now the default
     [Parameter(ParameterSetName = 'Scan')][switch]$SkipSpeedTest,
+    [Parameter(ParameterSetName = 'Upload', Mandatory)][switch]$Upload,
+    [Parameter(ParameterSetName = 'Upload')][string]$Path,
     [Parameter(ParameterSetName = 'Resume', Mandatory)][string]$Resume,
     [string]$OutputFolder = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'HeatMap360'),
     [int]$WaitMinutes = 15
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
-$ClientVersion = '1.2.0'
+# A 32-bit PowerShell on 64-bit Windows sees the 32-bit registry view (no MachineGuid, 32-bit apps only). Run the
+# same script again in 64-bit Windows PowerShell with the same parameters.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $ps64 = Join-Path $env:windir 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    $relaunch = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+    foreach ($p in $PSBoundParameters.GetEnumerator()) {
+        if ($p.Value -is [System.Management.Automation.SwitchParameter]) { if ($p.Value) { $relaunch += "-$($p.Key)" } }
+        else { $relaunch += "-$($p.Key)"; $relaunch += "$($p.Value)" }
+    }
+    & $ps64 @relaunch
+    exit $LASTEXITCODE
+}
+$ClientVersion = '1.3.0'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $null = New-Item -ItemType Directory -Path $OutputFolder -Force
 
@@ -330,7 +350,19 @@ function Save-Report([string]$Id, [string]$Token) {
     }
 }
 
-if ($Server -eq '__HEATMAP_URL__' -and -not $SaveOnly) { throw 'Pass -Server https://<your HeatMap 360 address> (or download the script from your HeatMap 360 page, which fills it in).' }
+function Send-Inventory([string]$File) {
+    $json = [IO.File]::ReadAllText($File, [Text.UTF8Encoding]::new($false))
+    Write-Host "Uploading $File ..."
+    $resp = Invoke-RestMethod -Method Post -Uri "$Server/api/scans" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -UseBasicParsing
+    # The token is the only way to get this scan's PDF. Keep it with the inventory, readable by this user only.
+    $ticket = Join-Path $OutputFolder "scan-$($resp.id).json"
+    [ordered]@{ id = $resp.id; token = $resp.token; server = $Server; sentAt = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $ticket -Encoding UTF8
+    Write-Host "Sent. Scan ID: $($resp.id)"
+    $null = Save-Report -Id $resp.id -Token $resp.token
+}
+
+$sends = $PSCmdlet.ParameterSetName -ne 'Scan' -or $ScanAndUpload
+if ($Server -eq '__HEATMAP_URL__' -and $sends) { throw 'Pass -Server https://<your HeatMap 360 address> (or download the script from your HeatMap 360 page, which fills it in).' }
 $Server = $Server.TrimEnd('/')
 
 if ($PSCmdlet.ParameterSetName -eq 'Resume') {
@@ -341,17 +373,26 @@ if ($PSCmdlet.ParameterSetName -eq 'Resume') {
     return
 }
 
+if ($PSCmdlet.ParameterSetName -eq 'Upload') {
+    if (-not $Path) {
+        $newest = Get-ChildItem -LiteralPath $OutputFolder -Filter 'inventory-*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $newest) { throw "No saved scan in $OutputFolder. Run the scanner without -Upload first." }
+        $Path = $newest.FullName
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "File not found: $Path" }
+    Send-Inventory -File (Resolve-Path -LiteralPath $Path).ProviderPath
+    return
+}
+
 Write-Host 'Scanning this computer (read-only)...'
 $json = Protect-Json ((Get-Inventory) | ConvertTo-Json -Depth 8 -Compress)
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $file = Join-Path $OutputFolder "inventory-$stamp.json"
 [IO.File]::WriteAllText($file, $json, [Text.UTF8Encoding]::new($false))
-Write-Host "Inventory saved: $file"
-if ($SaveOnly) { Write-Host 'Nothing was sent (-SaveOnly).'; return }
-
-$resp = Invoke-RestMethod -Method Post -Uri "$Server/api/scans" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -UseBasicParsing
-# The token is the only way to get this scan's PDF. Keep it with the inventory, readable by this user only.
-$ticket = Join-Path $OutputFolder "scan-$($resp.id).json"
-[ordered]@{ id = $resp.id; token = $resp.token; server = $Server; sentAt = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $ticket -Encoding UTF8
-Write-Host "Sent. Scan ID: $($resp.id)"
-$null = Save-Report -Id $resp.id -Token $resp.token
+Write-Host "Step 1 done. Anonymized scan saved (nothing was sent): $file"
+if (-not $ScanAndUpload) {
+    Write-Host 'Step 2: upload it with the Upload button on the HeatMap 360 "Get the scanner" page, or run:'
+    Write-Host '  .\Invoke-HeatMapScan.ps1 -Upload'
+    return
+}
+Send-Inventory -File $file

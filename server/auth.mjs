@@ -2,7 +2,9 @@
 // assertion is a managed-identity token (federated identity credential), the same pattern as r360. No secret,
 // certificate or key. Tokens stay in server memory.
 //
-// "Elevated" = an ACTIVE member of the HeatMap PIM group (HM360_ADMIN_GROUP_ID). PIM for Groups only adds the
+// "Elevated" = an ACTIVE member of the HeatMap PIM group (HM360_ADMIN_GROUP_ID). "Project 360 Admin" = an ACTIVE member
+// of the Project 360 Admin PIM group (HM360_PROJECT_ADMIN_GROUP_ID); only they may change settings such as where the
+// findings table lives. PIM for Groups only adds the
 // membership while the activation lasts, so the server re-checks it with Graph (/me/transitiveMemberOf, User.Read
 // only) at most every 5 minutes and drops access as soon as the activation ends.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -29,7 +31,7 @@ export class SessionStore {
   constructor({ now = () => Date.now(), ttl = SESSION_TTL, max = 1000 } = {}) { this.now = now; this.ttl = ttl; this.max = max; this.map = new Map(); }
   create() {
     if (this.map.size >= this.max) this.sweep();
-    const s = { id: randomBytes(32).toString('base64url'), created: this.now(), csrf: randomBytes(32).toString('base64url'), user: null, elevation: null };
+    const s = { id: randomBytes(32).toString('base64url'), created: this.now(), csrf: randomBytes(32).toString('base64url'), user: null, elevation: null, projectElevation: null };
     this.map.set(s.id, s);
     return s;
   }
@@ -64,8 +66,8 @@ export function userFromClaims(claims, { tenantId, clientId }) {
 const safeEq = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 // Is the signed-in user an active (transitive) member of the group? Pure HTTP; `fetchImpl` is swapped in tests.
-export async function isActiveMember(accessToken, groupId, fetchImpl = (...a) => fetch(...a)) {
-  if (!/^[0-9a-f-]{36}$/i.test(groupId || '')) throw new Error('HM360_ADMIN_GROUP_ID is not a group object id');
+export async function isActiveMember(accessToken, groupId, fetchImpl = (...a) => fetch(...a), setting = 'HM360_ADMIN_GROUP_ID') {
+  if (!/^[0-9a-f-]{36}$/i.test(groupId || '')) throw new Error(`${setting} is not a group object id`);
   const url = `https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.group?$count=true&$select=id&$filter=id eq '${groupId}'`;
   const r = await fetchImpl(url, { headers: { authorization: `Bearer ${accessToken}`, consistencylevel: 'eventual' }, redirect: 'error', signal: AbortSignal.timeout(15_000) });
   if (!r.ok) throw new Error(`Graph membership check failed: HTTP ${r.status}`);
@@ -104,6 +106,7 @@ export function createAuth({ config, miToken, msal = {}, fetchImpl }) {
       session.user = userFromClaims(result.idTokenClaims, { tenantId: config.tenantId, clientId: config.clientId });
       session.homeAccountId = result.account.homeAccountId;
       session.elevation = null;
+      session.projectElevation = null;
       return session.user;
     },
     // Cached for ELEVATION_RECHECK unless `force` (the "I activated it, check again" button).
@@ -112,6 +115,14 @@ export function createAuth({ config, miToken, msal = {}, fetchImpl }) {
       if (!force && session.elevation && now - session.elevation.at < ELEVATION_RECHECK) return session.elevation.ok;
       const ok = await isActiveMember(await token(session), config.adminGroupId, fetchImpl);
       session.elevation = { ok, at: now };
+      return ok;
+    },
+    // Same check for the Project 360 Admin group. Not configured = nobody is a Project 360 Admin.
+    async projectAdmin(session, { force = false, now = Date.now() } = {}) {
+      if (!session.user || !config.projectAdminGroupId) return false;
+      if (!force && session.projectElevation && now - session.projectElevation.at < ELEVATION_RECHECK) return session.projectElevation.ok;
+      const ok = await isActiveMember(await token(session), config.projectAdminGroupId, fetchImpl, 'HM360_PROJECT_ADMIN_GROUP_ID');
+      session.projectElevation = { ok, at: now };
       return ok;
     },
     async signOut(session) {

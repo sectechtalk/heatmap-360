@@ -1,0 +1,21 @@
+# Modelled on a winget defaultLocale manifest (Mozilla.Firefox 132.0) with a publisher "Unresolved" section added.
+PackageIdentifier: Mozilla.Firefox
+PackageVersion: "132.0"
+PackageLocale: en-US
+Publisher: Mozilla
+PackageName: Mozilla Firefox
+ShortDescription: Mozilla Firefox is free and open source software.
+ReleaseNotes: |-
+  New
+  - Wide Color Gamut WebGL is now available for Windows and macOS users!
+  Fixed
+  - Various security fixes.
+  Unresolved
+  - Some users may see a blank window after restoring a session with many tabs.
+    Restarting the browser restores the window.
+  - Printing to some network printers can stall at 0%.
+  Developer
+  - Support for HTTP/2 Push has been removed.
+ReleaseNotesUrl: https://www.mozilla.org/firefox/132.0/releasenotes/
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -24,3 +24,7 @@ test('sign-in callback and claims checks', () => {
   assert.equal(userFromClaims({ tid: 'a', aud: 'c', oid: G, name: 'N' }, { tenantId: 'a', clientId: 'c' }).name, 'N');
   assert.deepEqual(parseCookies('a=1; b=%E0%A4%A'), { a: '1' });
 });
+
+test('Project 360 Admin check reports its own setting name', async () => {
+  await assert.rejects(isActiveMember('tok', 'nope', async () => Response.json({ value: [] }), 'HM360_PROJECT_ADMIN_GROUP_ID'), /HM360_PROJECT_ADMIN_GROUP_ID/);
+});

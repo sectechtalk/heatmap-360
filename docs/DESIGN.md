@@ -81,6 +81,71 @@ with a token from the app's managed identity (id-heatmap360) for `https://graph.
 application permission `ServiceHealth.Read.All` (app role 79c261e0-fe76-4144-aad5-bdc68fbe4037), assigned to its
 service principal. Without the identity (local runs) or the permission (401/403) it shows "Not connected" with why.
 Advisories are notices, `serviceInterruption` is an outage, other open incidents are degraded.
+The page groups services into three columns: Operational (grade ok), With incidents (notice, degraded or outage) and
+Not checked (unknown). Each service is a collapsible card; a pane of checkboxes chooses which services are shown (kept
+in the browser's local storage).
+
+## Internet pages (server, `server/news.mjs`)
+
+"Internet - Cloud Services", "Internet - Exploits" and "Internet - Patches" show the latest headlines from a fixed list of well-known
+sources, read from each one's public RSS or Atom feed (no credentials, no model). `/api/admin/news/cloud|exploits|patches` is
+for elevated admins; feeds are cached for 30 minutes, capped at 3 MB and 10 seconds each, and a failing feed shows
+"Not checked" with the reason. Headline links are kept only when they are https on the source's own host. "x.com" is
+an empty page with four time windows (7 days, 24 hours, 4 hours, 1 hour) until its source is decided.
+
+## Bluesky page (server, `server/bluesky.mjs`)
+
+The owner chose Bluesky over x.com on 2026-11-15 (x.com charges per post read; Bluesky's public API is free with no
+account). The page lists the top 50 official business accounts for patches, updates, security and service health
+(ranked 2026-11-15: replies 35, reposts 25, patch relevance 25, frequency and reach 15) plus the official Microsoft
+accounts that have not posted yet. Accounts are pinned by DID, so a handle change cannot swap in another account.
+`/api/admin/bluesky` (elevated admins) reads each account's own top-level posts with `app.bsky.feed.getAuthorFeed`,
+six at a time, cached 15 minutes; a failing account shows "Not checked". `/api/admin/bluesky/thread?uri=` reads the
+direct replies to one post on demand (`app.bsky.feed.getPostThread`), only for posts by a listed account, most-liked
+first, capped at 30 and shown as plain text. Post links are built from the DID and record key, never copied from the
+response. HeatMap 360 never signs in, posts, likes or follows.
+
+## Findings store (`bot/findings.mjs`, Azure Table Storage)
+
+Every item from every scan goes into ONE table, `findings`, in a Standard LRS storage account in `rg-heatmap360`. Table
+Storage is pay per use with no always-on charge (about $0.045 per GB-month and $0.00036 per 10,000 transactions at list
+price), so a few thousand rows cost cents a month. It does not depend on the web app's container, so scale-to-zero
+does not matter, and the web app can later read it with its managed identity.
+
+* **Keys**: `PartitionKey` = the scanner's anonymous machine id. `RowKey` = `<Kind>|<readable item id>|<8-hex hash>`,
+  so each item has one row per machine. A newer scan of that machine updates the row in place; items missing from the
+  newest scan get `Removed = true`. One extra row per machine (`RowKey = machine`, `Category = Machine`) holds the
+  newest scan's summary and overall grade. Older scans than the one stored are ignored.
+* **Categories** (`Category`): Windows, Patch, Application, Firmware, Driver, Hardware, Disk, Network, Security,
+  Events, Scan. `Kind` is the exact type: `os`, `windows-update`, `app` (installed program), `winget-package`, `bios`,
+  `baseboard`, `cpu`, `memory`, `battery`, `disk` (version = disk firmware), `volume`, `driver`, `network-adapter`,
+  `network-setting`, `wifi`, `network-health`, `security`, `event`, `scan-error`.
+* **Columns**: Category, Kind, ItemKey, Name, Vendor, InstalledVersion, ItemDate, Detail (JSON of everything else the
+  scan reported), Status, LookupStatus, LatestVersion, LatestDate, KnownIssueCount, KnownIssues (JSON), ExploitedCount,
+  ExploitedCVEs (JSON), Note, Source, FirstSeen, LastSeen, LastChecked, ScanId, Removed.
+* **Status** (worst first): Exploited, Unsupported, Known problems, Outdated, Current, Pending, Lookup failed,
+  Not checked, Info (measurements and inventory the results page grades).
+* **Import** reads `results/*.json` (inventory plus the bot's verdicts), so rows start out with the bot's answers.
+* **Background job** looks up each distinct item (Kind + item + version, across machines) still installed somewhere,
+  oldest answer first, at most `--limit` (40) per run, rechecked after `--max-age-hours` (24); failed lookups retry on
+  the next run. The answer goes onto every row of that item. Sources: Windows release information and known issues;
+  winget catalog and publisher release notes; CISA KEV checked against CVE version ranges; HP/Lenovo BIOS catalogs.
+  Only CONFIRMED KEV matches count as Exploited; unverified name matches are not stored, so the table never adds to
+  the "verify by hand" list. Drivers, disk firmware, NICs, CPUs and boards are "Not checked" until an official vendor
+  source is added.
+* **Sign-in**: Entra only (`--credential cli`, the default, uses the desktop's `az login` and never a machine identity such as Azure Arc's; `--credential managed-identity` in Azure) with the role
+  Storage Table Data Contributor on the account. No account keys, SAS tokens or connection strings.
+* **Where it lives is a setting**: the Settings page (Project 360 Admins only: an ACTIVE member of the "Project 360
+  Admin" PIM group, `HM360_PROJECT_ADMIN_GROUP_ID`) saves the account and table names to `settings/findings.json` in
+  the data store. The job reads it on each run, so moving the storage is: create the new account by hand, grant the
+  role, save the new name. The job then rebuilds the table from the scan results. The storage account is never created
+  by code.
+
+## Uploading (two steps)
+
+The scanner saves `Documents\HeatMap360\inventory-<time>.json` and sends nothing. The user uploads that file from the
+"Get the scanner" page (the browser posts it to `/api/scans` and keeps the scan ID and token in local storage so it can
+poll status and download the PDF; "Save ticket" writes `scan-<id>.json` for `-Resume`) or with `-Upload`.
 
 ## Grades
 

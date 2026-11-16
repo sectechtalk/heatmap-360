@@ -83,21 +83,24 @@ export function softwareMatches(v, s) {
 }
 const isWindowsEntry = v => norm(v.vendorProject) === 'microsoft' && /\bwindows\b|\bwin32k\b/.test(norm(v.product));
 
-// KEV lists vendor + product, not versions: every match is a CANDIDATE to verify. Windows entries only count when
-// they were added after the newest installed update (cumulative updates).
-export function kevCandidates(inv, kev, epss = {}) {
+// KEV lists vendor + product, not versions: every match is a CANDIDATE that bot/cve.mjs then checks against the CVE
+// record's version ranges. Windows entries only count when they were added after the installed build was released
+// (cumulative updates carry every earlier fix); `patchedThrough` is that release date, else the newest update.
+export function kevCandidates(inv, kev, epss = {}, { patchedThrough = null } = {}) {
   const apps = inv.apps || [];
-  const last = lastUpdateDate(inv);
+  const last = patchedThrough ? Date.parse(patchedThrough) : lastUpdateDate(inv);
   const out = [];
   for (const v of kev?.vulnerabilities || []) {
     const base = { cveID: v.cveID, vendor: v.vendorProject, product: v.product, name: v.vulnerabilityName, dateAdded: v.dateAdded,
       dueDate: v.dueDate, ransomware: v.knownRansomwareCampaignUse === 'Known', epss: epss[v.cveID]?.epss ?? null };
     if (isWindowsEntry(v)) {
-      if (!last || Date.parse(v.dateAdded) > last) out.push({ ...base, kind: 'os', reason: last ? 'Added after the newest installed update' : 'No update history reported' });
+      if (!last || Date.parse(v.dateAdded) > last) out.push({ ...base, kind: 'os', reason: last ? 'Added after the installed Windows build was released' : 'No update history reported' });
       continue;
     }
-    const hit = apps.find(a => a?.name && softwareMatches(v, a));
-    if (hit) out.push({ ...base, kind: 'app', app: hit.name, version: hit.version ?? null, reason: 'Installed program matches; check its version against the CVE' });
+    const alias = ALIASES.find(a => a.vendor === norm(v.vendorProject) && a.product.test(norm(v.product)));
+    for (const hit of apps.filter(a => a?.name && softwareMatches(v, a)))
+      out.push({ ...base, kind: 'app', app: hit.name, version: hit.version ?? null, related: Boolean(alias) && !/\bchrome\b/.test(norm(hit.name)),
+        reason: 'Installed program matches the product CISA lists' });
   }
   return out.sort((a, b) => (b.ransomware - a.ransomware) || ((b.epss ?? 0) - (a.epss ?? 0)) || String(b.dateAdded).localeCompare(String(a.dateAdded)));
 }

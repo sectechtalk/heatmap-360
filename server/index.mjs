@@ -12,6 +12,8 @@ import { createLimiter } from './ratelimit.mjs';
 import { createLocalStore, createGitHubStore } from './datastore.mjs';
 import { renderReport } from './report.mjs';
 import { createServiceHealth } from './services.mjs';
+import { createNews } from './news.mjs';
+import { createBluesky } from './bluesky.mjs';
 import { SessionStore, parseCookies, cookieHeader, SESSION_COOKIE, SESSION_TTL, PIM_GROUPS_URL, createAuth } from './auth.mjs';
 import { createManagedIdentity } from './identity.mjs';
 
@@ -36,12 +38,14 @@ export function summarize(r) {
     build: inv.os ? `${inv.os.build}.${inv.os.ubr ?? 0}` : null, summary: r.summary };
 }
 
-export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript, serviceHealth } = {}) {
+export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript, serviceHealth, news, bluesky } = {}) {
   store ??= config.data.kind === 'github' ? createGitHubStore(config.data) : createLocalStore(config.data.dir);
   // One managed identity (id-heatmap360) for sign-in and for Microsoft 365 service health. Only present when hosted.
   const miToken = config.entra && process.env.IDENTITY_ENDPOINT ? createManagedIdentity({ clientId: config.entra.miClientId }) : null;
   if (auth === undefined && config.entra) auth = createAuth({ config: config.entra, miToken: miToken || createManagedIdentity({ clientId: config.entra.miClientId }) });
   serviceHealth ??= createServiceHealth({ graphToken: miToken });
+  news ??= createNews();
+  bluesky ??= createBluesky();
   clientScript ??= readFileSync(path.join(root, 'client', 'Invoke-HeatMapScan.ps1'), 'utf8');
   const limiter = createLimiter({ now, rules: [{ windowMs: 600_000, limit: config.limits.perIp10Min }, { windowMs: 86_400_000, limit: config.limits.perIpDay }] });
   const globalLimiter = createLimiter({ now, rules: [{ windowMs: 86_400_000, limit: config.limits.globalDay }] });
@@ -72,11 +76,24 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
     return req.session;
   };
   const csrf = (req, res, next) => (req.session && eqHex(req.get('x-csrf') || '', req.session.csrf) ? next() : next(err(403, 'Missing or wrong CSRF token. Reload the page.')));
+  const csrfIfSession = (req, res, next) => (req.session || !config.devAdmin ? csrf(req, res, next) : next());
   async function isAdmin(req, force = false) {
     if (config.devAdmin) return true;
     if (!auth || !req.session?.user) return false;
     return auth.elevated(req.session, { force });
   }
+  async function isProjectAdmin(req, force = false) {
+    if (config.devAdmin) return true;
+    if (!auth?.projectAdmin || !req.session?.user) return false;
+    return auth.projectAdmin(req.session, { force });
+  }
+  const requireProjectAdmin = async (req, res, next) => {
+    try {
+      if (!req.session?.user && !config.devAdmin) throw err(401, 'Sign in first.');
+      if (!(await isProjectAdmin(req))) throw err(403, 'Activate your Project 360 Admin PIM group membership, then check again.');
+      next();
+    } catch (e) { next(e); }
+  };
   const requireAdmin = async (req, res, next) => {
     try {
       if (!req.session?.user && !config.devAdmin) throw err(401, 'Sign in first.');
@@ -130,14 +147,18 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
   app.get('/api/me', async (req, res, next) => {
     try {
       const s = req.session;
-      const elevated = await isAdmin(req).catch(() => false);
-      res.json({ authConfigured: Boolean(auth) || config.devAdmin, dev: config.devAdmin, signedIn: Boolean(s?.user) || config.devAdmin,
+      // A failed check is not the same as "not a member": say why, so the page can ask for a fresh sign-in.
+      let elevationError = null;
+      const elevated = await isAdmin(req).catch(e => { elevationError = e.status === 401 ? 'signin' : 'check'; return false; });
+      if (elevationError === 'signin' && s) s.user = null;
+      const projectAdmin = elevationError ? false : await isProjectAdmin(req).catch(() => false);
+      res.json({ authConfigured: Boolean(auth) || config.devAdmin, dev: config.devAdmin, signedIn: Boolean(s?.user) || config.devAdmin, elevationError,
         user: s?.user ? { name: s.user.name, upn: s.user.upn } : config.devAdmin ? { name: 'Local developer', upn: '' } : null,
-        elevated, activateUrl: PIM_GROUPS_URL, csrf: s?.csrf ?? null, scannerUrl: '/client/Invoke-HeatMapScan.ps1', publicUrl: config.publicUrl });
+        elevated, projectAdmin, activateUrl: PIM_GROUPS_URL, csrf: s?.csrf ?? null, scannerUrl: '/client/Invoke-HeatMapScan.ps1', publicUrl: config.publicUrl });
     } catch (e) { next(e); }
   });
   app.post('/api/me/recheck', csrf, async (req, res, next) => {
-    try { res.json({ elevated: await isAdmin(req, true) }); } catch (e) { next(e); }
+    try { res.json({ elevated: await isAdmin(req, true), projectAdmin: await isProjectAdmin(req, true).catch(() => false) }); } catch (e) { next(e); }
   });
   app.get('/auth/signin', async (req, res, next) => {
     try { if (!auth) throw err(503, 'Sign-in is not configured (HM360_TENANT_ID, HM360_CLIENT_ID).'); res.redirect(await auth.beginSignIn(ensureSession(req, res))); } catch (e) { next(e); }
@@ -149,8 +170,36 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
       res.redirect('/#scans');
     } catch (e) { next(e); }
   });
-  app.post('/auth/signout', csrf, async (req, res, next) => {
-    try { await auth?.signOut(req.session); sessions.destroy(req.session.id); res.append('Set-Cookie', cookieHeader('', 0)); res.json({ ok: true }); } catch (e) { next(e); }
+  // With no live session (expired, or the app restarted after scaling to zero) there is nothing to protect with CSRF:
+  // just clear the cookie so the browser is signed out either way.
+  app.post('/auth/signout', (req, res, next) => (req.session ? csrf(req, res, next) : next()), async (req, res, next) => {
+    try {
+      if (req.session) { await auth?.signOut(req.session); sessions.destroy(req.session.id); }
+      res.append('Set-Cookie', cookieHeader('', 0)); res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
+  // ---------- Project 360 Admins: settings ----------
+  // Where the findings table lives (Azure Table Storage account + table). Saved in the data store; the findings job
+  // reads it on its next run, so the storage can be moved without a code change. Only names are stored, never keys.
+  const SETTINGS = 'settings/findings.json';
+  const ACCOUNT = /^[a-z0-9]{3,24}$/, TABLE = /^[A-Za-z][A-Za-z0-9]{2,62}$/;
+  app.get('/api/admin/settings', requireProjectAdmin, async (req, res, next) => {
+    try {
+      const s = await store.get(SETTINGS);
+      res.json({ findings: { account: s?.findings?.account ?? null, table: s?.findings?.table ?? 'findings' }, updatedAt: s?.updatedAt ?? null, updatedBy: s?.updatedBy ?? null });
+    } catch (e) { next(e); }
+  });
+  app.put('/api/admin/settings/findings', requireProjectAdmin, csrfIfSession, express.json({ limit: '2kb', type: ['application/json'] }), async (req, res, next) => {
+    try {
+      const { account, table = 'findings', ...rest } = req.body || {};
+      if (Object.keys(rest).length) throw err(400, 'Only account and table can be set.');
+      if (typeof account !== 'string' || !ACCOUNT.test(account)) throw err(400, 'Storage account name: 3 to 24 lowercase letters and digits.');
+      if (typeof table !== 'string' || !TABLE.test(table)) throw err(400, 'Table name: 3 to 63 letters and digits, starting with a letter.');
+      const value = { schema: 'hm360.settings/1', findings: { account, table }, updatedAt: new Date(now()).toISOString(), updatedBy: req.session?.user?.upn || (config.devAdmin ? 'local developer' : null) };
+      await store.put(SETTINGS, value, 'Findings storage location');
+      res.json({ findings: value.findings, updatedAt: value.updatedAt, updatedBy: value.updatedBy });
+    } catch (e) { next(e); }
   });
 
   // ---------- admins ----------
@@ -173,6 +222,26 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
   // Public status feeds of online services (Azure, AWS, Google, GitHub, Cloudflare), cached for 5 minutes.
   app.get('/api/admin/services', requireAdmin, async (req, res, next) => {
     try { res.json(await serviceHealth()); } catch (e) { next(e); }
+  });
+  // Internet pages: latest headlines from each listed source's public RSS/Atom feed, cached for 30 minutes.
+  app.get('/api/admin/news/:kind', requireAdmin, async (req, res, next) => {
+    try {
+      const out = ['cloud', 'exploits', 'patches'].includes(req.params.kind) ? await news(req.params.kind) : null;
+      if (!out) throw err(404, 'Unknown page.');
+      res.json(out);
+    } catch (e) { next(e); }
+  });
+  // Bluesky page: latest posts from the listed official vendor accounts (free public API, read only), cached 15 minutes.
+  app.get('/api/admin/bluesky', requireAdmin, async (req, res, next) => {
+    try { res.json(await bluesky.feed()); } catch (e) { next(e); }
+  });
+  // Replies to one post by a listed account, read on demand. Anything else is 404.
+  app.get('/api/admin/bluesky/thread', requireAdmin, async (req, res, next) => {
+    try {
+      const out = typeof req.query.uri === 'string' && req.query.uri.length <= 200 ? await bluesky.thread(req.query.uri) : null;
+      if (!out) throw err(404, 'Unknown post.');
+      res.json(out);
+    } catch (e) { next(e.status ? e : err(502, 'Could not read the replies from Bluesky.')); }
   });
   app.get('/api/admin/scans/:id/report.pdf', requireAdmin, async (req, res, next) => {
     try {

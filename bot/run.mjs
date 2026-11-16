@@ -14,6 +14,8 @@ import { analyze } from './analyze.mjs';
 import { parseReleaseInfo, RELEASE_PAGES } from './windows.mjs';
 import { createWingetLookup } from './apps.mjs';
 import { createFeeds } from './kev.mjs';
+import { createCveLookup } from './cve.mjs';
+import { createReleaseNotesLookup, createGithubReleaseLookup } from './appissues.mjs';
 import { checkInventory } from '../server/schema.mjs';
 
 const ID = /^[0-9]{14}-[0-9a-f]{8}$/;
@@ -45,6 +47,9 @@ export function createSources({ fetchImpl = (...a) => fetch(...a), cacheDir, git
       if (u.protocol !== 'https:' || !VENDOR_HOSTS.has(u.hostname)) return Promise.reject(new Error(`${u.hostname} is not an allowed vendor source`));
       return once(url, () => page(url, fetchImpl, { missingOk: true }));
     },
+    cveRecord: createCveLookup({ dir: cacheDir, fetchImpl }),
+    releaseNotes: createReleaseNotesLookup({ fetchImpl }),
+    githubReleaseNotes: createGithubReleaseLookup({ fetchImpl, token: githubToken }),
     kev: () => once('kev', async () => { const s = await feeds.refresh(); if (!s.kev) throw new Error(s.lastError || 'KEV catalog unavailable'); return s; }),
   };
 }

@@ -4,13 +4,13 @@
 const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 const decode = s => String(s).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) =>
   e[0] === '#' ? String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : ENT[e.toLowerCase()] ?? m);
-const plain = s => decode(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
-const blocks = (xml, tag) => [...String(xml).matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'gi'))].map(m => m[1]);
-const field = (xml, tag) => { const m = String(xml).match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? plain(m[1]) : null; };
-const iso = s => { const t = Date.parse(s); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
-const clip = (s, n = 400) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s ?? null);
+export const plain = s => decode(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
+export const blocks = (xml, tag) => [...String(xml).matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'gi'))].map(m => m[1]);
+export const field = (xml, tag) => { const m = String(xml).match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? plain(m[1]) : null; };
+export const iso = s => { const t = Date.parse(s); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
+export const clip = (s, n = 400) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s ?? null);
 // Links shown on the page must point at the provider's own site.
-const safeLink = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.some(h => u.hostname === h || u.hostname.endsWith(`.${h}`)) ? u.href : null; } catch { return null; } };
+export const safeLink = (url, hosts) => { try { const u = new URL(url); return u.protocol === 'https:' && hosts.some(h => u.hostname === h || u.hostname.endsWith(`.${h}`)) ? u.href : null; } catch { return null; } };
 const RANK = { ok: 0, info: 1, warn: 2, bad: 3 };
 
 export function parseRss(xml) {
