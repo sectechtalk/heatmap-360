@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>HeatMap 360</title>
+  <link rel="stylesheet" href="360-base.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <script type="module" src="shell.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <nav class="rail" id="rail" data-rail aria-label="Main">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="2" y="2" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="12" y="2" width="8" height="8" rx="2" fill="#e8b454"/><rect x="22" y="2" width="8" height="8" rx="2" fill="#b3261e"/>
+          <rect x="2" y="12" width="8" height="8" rx="2" fill="#e8b454"/><rect x="12" y="12" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="22" y="12" width="8" height="8" rx="2" fill="#e8b454"/>
+          <rect x="2" y="22" width="8" height="8" rx="2" fill="#1d7a3e"/><rect x="12" y="22" width="8" height="8" rx="2" fill="#b3261e"/><rect x="22" y="22" width="8" height="8" rx="2" fill="#1d7a3e"/>
+        </svg>
+        <div><div class="brand-name">HeatMap 360</div><div class="brand-sub">Health · Updates · Exposure</div></div>
+      </div>
+      <div id="app-switcher" class="app-switcher" data-app="hm-360"></div>
+      <div class="nav-group"><button type="button" class="nav-label" aria-expanded="true" data-section="new-hire"><span>New hire</span><span class="nav-chevron" aria-hidden="true"></span></button>
+        <a class="nav-item" href="#overview" data-route="overview"><span data-nav-icon="compass"></span>Overview</a>
+        <a class="nav-item" href="#guide" data-route="guide"><span data-nav-icon="book-open"></span>How To Guide</a>
+        <a class="nav-item" href="#scanner" data-route="scanner"><span data-nav-icon="download"></span>Get the scanner</a>
+      </div>
+      <div class="nav-group"><button type="button" class="nav-label" aria-expanded="true" data-section="results"><span>Results</span><span class="nav-chevron" aria-hidden="true"></span></button>
+        <a class="nav-item" href="#scans" data-route="scans"><span data-nav-icon="scan-search"></span>Scans</a>
+        <a class="nav-item sub" href="#pentests" data-route="pentests"><span data-nav-icon="flask-conical"></span>Pen tests</a>
+        <a class="nav-item sub" href="#vulnscans" data-route="vulnscans"><span data-nav-icon="shield-half"></span>Vulnerability scans</a>
+        <a class="nav-item" href="#attention" data-route="attention"><span data-nav-icon="siren"></span>High impact</a>
+        <a class="nav-item sub" href="#cloud" data-route="cloud"><span data-nav-icon="cloud"></span>Internet - Cloud Services</a>
+        <a class="nav-item sub" href="#exploits" data-route="exploits"><span data-nav-icon="bug"></span>Internet - Exploits</a>
+        <a class="nav-item sub" href="#cves" data-route="cves"><span data-nav-icon="shield-alert"></span>Cloudflare Radar CVEs</a>
+        <a class="nav-item sub" href="#patches" data-route="patches"><span data-nav-icon="package-check"></span>Internet - Patches</a>
+        <a class="nav-item sub" href="#x" data-route="x"><span data-nav-icon="at-sign"></span>x.com</a>
+        <a class="nav-item sub" href="#bluesky" data-route="bluesky"><span data-nav-icon="radar"></span>Bluesky</a>
+        <a class="nav-item" href="#services" data-route="services"><span data-nav-icon="server"></span>Service health</a>
+      </div>
+      <div class="nav-group"><button type="button" class="nav-label" aria-expanded="true" data-section="tools"><span>Tools</span><span class="nav-chevron" aria-hidden="true"></span></button>
+        <a class="nav-item" href="#options" data-route="options"><span data-nav-icon="sliders-horizontal"></span>Options</a>
+        <a class="nav-item is-hidden" href="#settings" data-route="settings"><span data-nav-icon="settings"></span>Settings</a>
+      </div>
+      <div class="rail-tools"><button id="theme-toggle" class="btn" type="button" aria-pressed="false"><span class="theme-label">Dark mode</span></button></div>
+      <div class="rail-foot" id="account"></div>
+    </nav>
+    <main class="main"><button id="nav-toggle" class="btn nav-toggle" type="button" aria-controls="rail" aria-expanded="false">Menu</button><div class="page" id="view"><p class="muted">Loading...</p></div></main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

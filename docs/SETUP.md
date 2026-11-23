@@ -1,0 +1,80 @@
+# Hosted setup
+
+Same pattern as e360 and r360: Azure Container Apps (consumption, scale to zero), a user-assigned managed identity for
+sign-in (no client secret), image on GitHub Container Registry. Target cost $0.
+
+## 1. GitHub
+
+1. Repos: `hm-360` (private, code), `heatmap-360` (public, export only), `hm-360-data` (private, uploads and results).
+2. Fine-grained token for HeatMap: **Repository access: only `hm-360-data`**; permissions **Contents: Read and write**
+   (Metadata read is added automatically). Nothing else, in particular no Workflows. Store it only as the Container
+   Apps secret `hm360-github-token`.
+3. In `hm-360-data`, add `.github/workflows/process.yml` from `bot/process.yml`.
+
+## 2. The bot on the admin desktop
+
+1. `git clone https://github.com/<your-account>/heatmap-360 C:\src\heatmap-360`, then `npm ci` there (Node 22+).
+2. `hm-360-data` → Settings → Actions → Runners → New self-hosted runner (Windows). Follow GitHub's steps, add the
+   label `hm360`, and install it as a service.
+3. Set the machine environment variable `HM360_BOT_DIR=C:\src\heatmap-360` and restart the runner service.
+4. Test: Actions → process scans → Run workflow. With an empty inbox it finishes with nothing to do.
+
+When the desktop is off, uploads wait in `inbox/`; the hourly schedule and the next push pick them up.
+
+### Findings store and lookup job (admin desktop)
+
+The findings table lives in an Azure Table Storage account that is created by hand in the Azure portal or CLI (it is
+deliberately not scripted here). The account the job runs as needs the role **Storage Table Data Contributor** on it.
+Which account and table to use is set on the **Settings** page by a Settings Admin (saved as
+`settings/findings.json` in the data store), so the storage can be moved later without a code change.
+
+On the desktop, sign in once with `az login`, then run (the job creates the table inside the account if it is missing):
+
+    node C:\src\heatmap-360\bot\findings.mjs --repo C:\src\heatmap-360\data\exchange
+
+`--account <name>` overrides the Settings page for one run. Add `--repo <hm-360-data checkout>` to include production
+scans. `--dry-run` uses memory only. To run it every hour, add a Task Scheduler task with the same command.
+
+## 3. Entra
+
+1. Security group **HeatMap Admins** (role-assignable not needed). Turn on PIM for Groups for it and make admins
+   **eligible** members, with the activation length you want. Note the group object ID.
+2. App registration **heatmap360-web**, single tenant. Redirect URI (Web): `https://<app fqdn>/auth/callback` (and
+   `http://localhost:3460/auth/callback` for testing). API permission: Microsoft Graph delegated `User.Read` only.
+3. User-assigned managed identity **id-heatmap360**. On heatmap360-web → Certificates & secrets → Federated credentials → add
+   "Managed identity" → id-heatmap360 (audience `api://AzureADTokenExchange`). No client secret.
+
+## 4. Container Apps
+
+Container app `app-heatmap360` with id-heatmap360 assigned, external HTTPS ingress on port 3460, 0-1 replicas, 0.25 vCPU / 0.5 GiB,
+image `ghcr.io/<your-account>/heatmap-360:<tag>` built from this repo's Dockerfile.
+
+| Variable | Value |
+|---|---|
+| `HM360_PUBLIC_URL` | `https://<app fqdn>` (also fills in the scanner download) |
+| `HM360_DATA_REPO` | `<your-account>/hm-360-data` |
+| `HM360_GITHUB_TOKEN` | secret ref `hm360-github-token` |
+| `HM360_TENANT_ID` | tenant ID |
+| `HM360_CLIENT_ID` | heatmap360-web application (client) ID |
+| `HM360_MI_CLIENT_ID` | id-heatmap360 client ID |
+| `HM360_ADMIN_GROUP_ID` | HeatMap Admins object ID |
+| `HM360_PROJECT_ADMIN_GROUP_ID` | Settings Admin object ID (Settings page; optional, unset = nobody can change settings) |
+| `HM360_UPLOADS_PER_10MIN`, `HM360_UPLOADS_PER_DAY`, `HM360_UPLOADS_GLOBAL_DAY` | optional, defaults 5 / 20 / 500 |
+
+Check: `https://<app fqdn>/api/health` returns `{"ok":true}`; **Get the scanner** downloads a script with your address
+filled in; signing in without an active PIM activation shows "Elevate to see scan results".
+
+## Microsoft 365 service health (optional)
+
+The Service health page reads Microsoft 365 issues from Microsoft Graph with the managed identity **id-heatmap360**. Give
+that identity the Graph **application** permission `ServiceHealth.Read.All` (a managed identity has no API
+permissions page, so assign the app role with Microsoft Graph PowerShell):
+
+```powershell
+Connect-MgGraph -Scopes AppRoleAssignment.ReadWrite.All, Application.Read.All
+$mi    = Get-MgServicePrincipal -Filter "displayName eq 'id-heatmap360'"
+$graph = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
+New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $mi.Id -PrincipalId $mi.Id -ResourceId $graph.Id -AppRoleId 79c261e0-fe76-4144-aad5-bdc68fbe4037
+```
+
+The assignment is the admin consent. Until it exists, Microsoft 365 shows "Not connected" on the page.

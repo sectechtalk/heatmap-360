@@ -1,0 +1,15 @@
+node_modules/
+data/
+.env
+.env.*
+*.log
+# Never commit keys or credentials
+*.pfx
+*.p12
+*.key
+*key.pem
+*.pem
+.vscode/
+.DS_Store
+Thumbs.db
+

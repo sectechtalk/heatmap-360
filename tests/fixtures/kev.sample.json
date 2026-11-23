@@ -1,0 +1,13 @@
+{
+  "title": "CISA Catalog of Known Exploited Vulnerabilities (test sample)",
+  "catalogVersion": "2026.11.01",
+  "dateReleased": "2026-11-01T00:00:00.000Z",
+  "count": 5,
+  "vulnerabilities": [
+    { "cveID": "CVE-2000-0001", "vendorProject": "Google", "product": "Chromium V8", "vulnerabilityName": "Sample V8 type confusion", "dateAdded": "2026-09-01", "dueDate": "2026-09-22", "knownRansomwareCampaignUse": "Unknown" },
+    { "cveID": "CVE-2000-0002", "vendorProject": "Adobe", "product": "Acrobat and Reader", "vulnerabilityName": "Sample use-after-free", "dateAdded": "2026-08-01", "dueDate": "2026-08-22", "knownRansomwareCampaignUse": "Known" },
+    { "cveID": "CVE-2000-0003", "vendorProject": "Microsoft", "product": "Windows", "vulnerabilityName": "Sample privilege escalation (old)", "dateAdded": "2026-01-10", "dueDate": "2026-01-31", "knownRansomwareCampaignUse": "Unknown" },
+    { "cveID": "CVE-2000-0004", "vendorProject": "Microsoft", "product": "Win32k", "vulnerabilityName": "Sample privilege escalation (new)", "dateAdded": "2026-10-20", "dueDate": "2026-11-10", "knownRansomwareCampaignUse": "Unknown" },
+    { "cveID": "CVE-2000-0005", "vendorProject": "Fortinet", "product": "FortiOS", "vulnerabilityName": "Sample appliance flaw", "dateAdded": "2026-10-01", "dueDate": "2026-10-22", "knownRansomwareCampaignUse": "Known" }
+  ]
+}

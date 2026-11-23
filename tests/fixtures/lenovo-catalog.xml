@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shape of a Lenovo System Update catalog (trimmed, made-up packages). -->
+<packages>
+  <package><location>https://download.lenovo.com/pccbbs/mobiles/x1aa01w_2_.xml</location><category>Audio</category></package>
+  <package><location>https://download.lenovo.com/pccbbs/mobiles/x1bb02w_2_.xml</location><category>BIOS UEFI</category></package>
+  <package><location>https://evil.example/x.xml</location><category>BIOS UEFI</category></package>
+</packages>

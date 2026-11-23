@@ -1,0 +1,27 @@
+# Copy to hm-360-data as .github/workflows/process.yml. Runs the HeatMap 360 bot on the admin's desktop
+# (self-hosted runner with the label "hm360") whenever HeatMap pushes an upload, and hourly to catch up after the
+# desktop was off. HeatMap's own token has Contents permission only (no Workflows), so it cannot change this file.
+name: process scans
+on:
+  push:
+    paths: ['inbox/**']
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: hm360-bot
+  cancel-in-progress: false
+jobs:
+  process:
+    runs-on: [self-hosted, hm360]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Process inbox
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # HM360_BOT_DIR is set on the runner machine (e.g. C:\src\heatmap-360). The bot code comes from there, never from this repo.
+        run: node "$env:HM360_BOT_DIR\bot\run.mjs" --repo . --commit

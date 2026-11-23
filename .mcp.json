@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "heatmap-360": {
+      "command": "node",
+      "args": ["mcp/server.mjs"],
+      "env": { "HM360_URL": "http://localhost:3460" }
+    }
+  }
+}

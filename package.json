@@ -1,0 +1,24 @@
+{
+  "name": "heatmap-360",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HeatMap 360: machine health and known in-the-wild vulnerabilities per computer",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "node --watch --env-file-if-exists=.env server/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check server/index.mjs && node --check server/auth.mjs && node --check server/datastore.mjs && node --check server/report.mjs && node --check bot/run.mjs && node --check bot/analyze.mjs && node --check bot/machine.mjs && node --check bot/firmware.mjs && node --check bot/nethealth.mjs && node --check bot/cve.mjs && node --check bot/appissues.mjs && node --check bot/findings.mjs && node --check server/services.mjs && node --check server/news.mjs && node --check server/bluesky.mjs && node --check server/attention.mjs && node --check server/cves.mjs && node --check public/app.js && node --check mcp/server.mjs"
+  },
+  "dependencies": {
+    "@azure/data-tables": "^13.3.2",
+    "@azure/identity": "^4.14.1",
+    "@azure/msal-node": "^3.8.0",
+    "ajv": "^8.20.0",
+    "express": "^5.1.0",
+    "pdfkit": "^0.17.2"
+  }
+}
