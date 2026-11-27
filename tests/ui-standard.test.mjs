@@ -83,13 +83,13 @@ test('rail: collapsible section headers and a unique shared icon for every page 
   assert.doesNotMatch(css, /\.nav-(label|item) \{[^}]*font-size/, 'header and link sizes come from 360-base.css');
 });
 
-test('New hire is the first rail section, above Results, with Overview, How To Guide and Get the scanner (as in r360)', () => {
+test('New hire is the first rail section, above Results, with Overview, How To Guide, Get the scanner and Scanner vs Intune & Defender', () => {
   const rail = html.slice(html.indexOf('<nav class="rail"'), html.indexOf('</nav>'));
   const sections = [...rail.matchAll(/data-section="([a-z-]+)"><span>([^<]+)<\/span>/g)].map(m => [m[1], m[2]]);
   assert.deepEqual(sections, [['new-hire', 'New hire'], ['results', 'Results'], ['tools', 'Tools']]);
   assert.doesNotMatch(html, /Get started/);
   const hire = rail.slice(rail.indexOf('data-section="new-hire"'), rail.indexOf('data-section="results"'));
-  assert.deepEqual([...hire.matchAll(/data-route="([a-z]+)"/g)].map(m => m[1]), ['overview', 'guide', 'scanner']);
+  assert.deepEqual([...hire.matchAll(/data-route="([a-z]+)"/g)].map(m => m[1]), ['overview', 'guide', 'scanner', 'compare']);
 });
 
 test('Overview: routed, the landing page before elevation, explains every area and lists what is not built yet', () => {
@@ -100,6 +100,14 @@ test('Overview: routed, the landing page before elevation, explains every area a
   const block = app.slice(app.indexOf('const OVERVIEW_AREAS'), app.indexOf('const OVERVIEW_FIRST_STEPS'));
   for (const route of [...html.matchAll(/data-route="([a-z]+)"/g)].map(m => m[1])) assert.match(block, new RegExp(`'#${route}'`), `Overview describes #${route}`);
   for (const planned of ['Matching scans against the news', 'AI-assisted lookups', 'Posts on the x.com page']) assert.match(app.slice(app.indexOf('const OVERVIEW_NOT_BUILT')), new RegExp(planned));
+});
+
+test('Scanner vs Intune & Defender: routed, public, and sourced', () => {
+  const app = read('app.js');
+  assert.match(html, /<a class="nav-item" href="#compare" data-route="compare"><span data-nav-icon="arrow-left-right"><\/span>Scanner vs Intune &amp; Defender<\/a>/);
+  assert.match(app, /name === 'compare' \? viewCompare\(\)/);
+  assert.match(app, /h\('h1', \{\}, 'Scanner vs Intune & Defender'\)/);
+  assert.match(app.slice(app.indexOf('function viewCompare')), /learn\.microsoft\.com/);
 });
 
 test('How To Guide: routed, linked from the scanner page, and it says lookups find known issues and AI will be used', () => {

@@ -1,0 +1,5 @@
+# Keep LF line endings on every checkout, Windows included (tests compare file text; the checks runner is on Windows).
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.pdf binary

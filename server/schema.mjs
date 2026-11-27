@@ -33,7 +33,7 @@ export const INVENTORY_SCHEMA = {
       firewall: obj({ domain: bool, private: bool, public: bool }),
     }),
     hardware: obj({
-      system: obj({ manufacturer: str(100), model: str(120), family: str(120) }),
+      system: obj({ manufacturer: str(100), model: str(120), family: str(120), sku: str(60) }), // sku: Dell only, since scanner 1.4.0
       memoryGB: num(0, 1e6),
       bios: obj({ vendor: str(100), version: str(100), releaseDate: day }),
       baseboard: obj({ manufacturer: str(100), product: str(100), version: str(100) }),
@@ -67,6 +67,8 @@ export const INVENTORY_SCHEMA = {
       speed: obj({ downloadMbps: num(0, 1e6), uploadMbps: num(0, 1e6), bytesDown: num(0, 1e10), bytesUp: num(0, 1e10), server: str(60) }),
       speedSkipped: bool,
     }),
+    // Since scanner 1.4.0. The driver updates Windows Update offers this computer (search only).
+    driverUpdates: obj({ checked: bool, updates: arr(obj({ title: str(300), model: str(200), manufacturer: str(120), provider: str(120), class: str(60), date: day }), 200) }),
     apps: arr(obj({ name: str(260), version: str(80), publisher: str(200) }), 3000),
     winget: arr(obj({ id: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$' }, version: str(80), source: str(40) }, ['id']), 3000),
     errors: arr({ type: 'string', maxLength: 500 }, 100),

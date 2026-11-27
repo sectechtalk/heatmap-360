@@ -4,12 +4,17 @@
 //
 //   inbox/<id>.json     upload record { schema: hm360.upload/1, id, receivedAt, tokenHash, inventory }
 //   results/<id>.json   bot output    { schema: hm360.result/1, ... }  (the bot deletes the inbox file)
+//   cases/<id>.json     incident cases { schema: hm360.case/1, ... } (server/cases.mjs), written by elevated admins
 //   settings/findings.json  where the findings table lives { schema: hm360.settings/1, findings: { account, table } },
 //                       written by Settings Admins on the Settings page, read by bot/findings.mjs
+//   settings/products.json  product matches confirmed or rejected on the Inventory catalog page { schema: hm360.products/1,
+//                       choices: { <product key>: "a:vendor:product" | null } }, read by bot/findings.mjs
+//   catalog/catalog.json  inventory catalog snapshot { schema: hm360.catalog/1, ... }, written by bot/findings.mjs after
+//                       each run (local folder only), read by the Inventory catalog page
 import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 
-const SAFE = /^((inbox|results)\/[0-9]{14}-[0-9a-f]{8}|settings\/findings)\.json$/;
+const SAFE = /^((inbox|results|cases)\/[0-9]{14}-[0-9a-f]{8}|settings\/findings|settings\/products|catalog\/catalog)\.json$/;
 function check(p) { if (!SAFE.test(p)) throw new Error(`refusing data path ${p}`); return p; }
 
 export function createLocalStore(dir) {
@@ -48,8 +53,8 @@ export function createGitHubStore({ owner, repo, branch = 'main', token, fetchIm
     },
     async put(p, value, message = `hm360: ${p}`) {
       const body = { message, branch, content: Buffer.from(JSON.stringify(value, null, 1)).toString('base64') };
-      // Replacing a file (only settings/ ever is) needs its current sha.
-      if (p.startsWith('settings/')) {
+      // Replacing a file (only settings/ and cases/ ever are) needs its current sha.
+      if (p.startsWith('settings/') || p.startsWith('cases/')) {
         const cur = await call(`${base}/${check(p)}?ref=${encodeURIComponent(branch)}`, { headers: headers({ accept: 'application/vnd.github+json' }) });
         if (cur) body.sha = (await cur.json()).sha;
       }

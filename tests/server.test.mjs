@@ -53,7 +53,7 @@ test('upload: strict validation, size limit and rate limit', async () => {
   } finally { server.close(); }
 });
 
-test('uploader: token unlocks status and PDF of that scan only', async () => {
+test('uploader: token unlocks status and the .mhtml results of that scan only', async () => {
   const { dir, server, base } = await start();
   try {
     const { id, token } = await (await post(base, inv)).json();
@@ -61,17 +61,25 @@ test('uploader: token unlocks status and PDF of that scan only', async () => {
     assert.equal((await fetch(`${base}/api/scans/${id}/status`)).status, 404);
     assert.equal((await fetch(`${base}/api/scans/${id}/status`, auth('x'.repeat(43)))).status, 404);
     assert.equal((await (await fetch(`${base}/api/scans/${id}/status`, auth(token))).json()).state, 'queued');
-    assert.equal((await fetch(`${base}/api/scans/${id}/report.pdf`, auth(token))).status, 409);
+    assert.equal((await fetch(`${base}/api/scans/${id}/report.mhtml`, auth(token))).status, 409);
+    assert.equal((await fetch(`${base}/api/scans/${id}/report.pdf`, auth(token))).status, 404, 'the scan PDF is gone');
     // the bot runs
     const upload = JSON.parse(await readFile(path.join(dir, 'inbox', `${id}.json`), 'utf8'));
     const info = parseReleaseInfo(fx('release-info.html'));
     const result = await analyze(upload, { releaseInfo: async () => info, knownIssuesPage: async () => fx('known-issues.html'), wingetLatest: async () => null, kev: async () => ({ kev: JSON.parse(fx('kev.sample.json')), epss: {} }) });
     await createLocalStore(dir).put(`results/${id}.json`, result);
     assert.equal((await (await fetch(`${base}/api/scans/${id}/status`, auth(token))).json()).state, 'done');
-    const pdf = await fetch(`${base}/api/scans/${id}/report.pdf`, auth(token));
-    assert.equal(pdf.status, 200);
-    assert.equal(pdf.headers.get('content-type'), 'application/pdf');
-    assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+    assert.equal((await fetch(`${base}/api/scans/${id}/report.mhtml`, auth('x'.repeat(43)))).status, 404, 'another token gets nothing');
+    const file = await fetch(`${base}/api/scans/${id}/report.mhtml`, auth(token));
+    assert.equal(file.status, 200);
+    assert.equal(file.headers.get('content-type'), 'message/rfc822');
+    assert.match(file.headers.get('content-disposition'), new RegExp(`HeatMap360-${id}\\.mhtml`));
+    const text = Buffer.from(await file.arrayBuffer()).toString('utf8');
+    assert.match(text, /^From: <Saved by HeatMap 360>\r\n/);
+    const html = Buffer.from(text.split('Content-Transfer-Encoding: base64\r\n')[1].split('\r\n\r\n')[1].split('--')[0].replace(/\s/g, ''), 'base64').toString('utf8');
+    assert.match(html, /<h1>HeatMap 360 scan results<\/h1>/);
+    assert.match(html, /Windows updates/);
+    assert.doesNotMatch(html, /<script/i);
   } finally { server.close(); }
 });
 
@@ -201,4 +209,39 @@ test('GitHub data store: replacing the settings file sends its current sha; othe
   assert.equal(calls.at(-1).method, 'PUT');
   assert.equal(calls.at(-1).body.sha, 'abc123');
   await assert.rejects(s.put('settings/other.json', {}), /refusing/);
+});
+
+test('inventory catalog: admins only, empty until the findings job writes a snapshot, then the snapshot', async () => {
+  const a = await start();
+  try { assert.equal((await fetch(`${a.base}/api/admin/catalog`)).status, 401); } finally { a.server.close(); }
+  const { dir, server, base } = await start({ HM360_DEV_ADMIN: '1' });
+  try {
+    let r = await (await fetch(`${base}/api/admin/catalog`)).json();
+    assert.deepEqual([r.generatedAt, r.items], [null, []]);
+    const snap = { schema: 'hm360.catalog/1', generatedAt: '2026-11-27T10:00:00.000Z', machines: 1, versions: 1, items: [{ kind: 'driver', name: 'Contoso NIC', versions: [{ version: '1.2', status: 'Not checked', machines: ['0123456789abcdef'] }], history: [], installs: [] }] };
+    await createLocalStore(dir).put('catalog/catalog.json', snap);
+    r = await (await fetch(`${base}/api/admin/catalog`)).json();
+    assert.equal(r.items[0].name, 'Contoso NIC');
+    await createLocalStore(dir).put('catalog/catalog.json', { schema: 'other' });
+    assert.deepEqual((await (await fetch(`${base}/api/admin/catalog`)).json()).items, [], 'an unknown file is not shown');
+  } finally { server.close(); }
+});
+
+test('inventory catalog: admins confirm or reject a product match; the page sees it before the job runs again', async () => {
+  const { dir, server, base } = await start({ HM360_DEV_ADMIN: '1' });
+  try {
+    const key = 'app|contoso remote helper|contoso';
+    await createLocalStore(dir).put('catalog/catalog.json', { schema: 'hm360.catalog/1', generatedAt: '2026-11-27T10:00:00.000Z', machines: 1, versions: 1,
+      items: [{ kind: 'app', name: 'Contoso Remote Helper', product: { key, status: 'proposed', cpe: 'a:contoso:helper', candidates: [] }, versions: [], history: [], installs: [] }] });
+    const put = body => fetch(`${base}/api/admin/catalog/products`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await put({ key, cpe: 'a:contoso:remote helper' })).status, 400, 'product names are checked');
+    assert.equal((await put({ key: '../x', cpe: null })).status, 400);
+    assert.equal((await put({ key, cpe: 'a:contoso:remote_helper', extra: 1 })).status, 400);
+    assert.equal((await put({ key, cpe: 'a:contoso:remote_helper' })).status, 200);
+    const saved = JSON.parse(await readFile(path.join(dir, 'settings', 'products.json'), 'utf8'));
+    assert.equal(saved.choices[key], 'a:contoso:remote_helper');
+    assert.equal((await (await fetch(`${base}/api/admin/catalog`)).json()).items[0].product.choice, 'a:contoso:remote_helper');
+    assert.equal((await put({ key, cpe: null })).status, 200);
+    assert.equal((await (await fetch(`${base}/api/admin/catalog`)).json()).items[0].product.choice, null);
+  } finally { server.close(); }
 });

@@ -1,0 +1,12 @@
+# Every package the AD Miner install pulls in, pinned so a rebuild installs the same versions.
+# neo4j, numpy, pytz and tqdm are AD Miner's own pins; the rest are what requests needs.
+# Chosen on 2026-11-27, each release at least two weeks old on that day.
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+neo4j==5.24.0
+numpy==2.1.1
+pytz==2022.7.1
+requests==2.34.2
+tqdm==4.66.4
+urllib3==2.8.0

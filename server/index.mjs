@@ -1,10 +1,12 @@
 // HeatMap 360 server.
-//   Public:   the scanner download, POST /api/scans (anonymous upload), and each uploader's own status + PDF (by token).
+//   Public:   the scanner download, POST /api/scans (anonymous upload), and each uploader's own status + .mhtml results (by token).
 //   Admins:   results pages, only for people signed in with Entra who are ACTIVE members of the HeatMap PIM group.
 import express from 'express';
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { checkInventory } from './schema.mjs';
@@ -15,7 +17,13 @@ import { createServiceHealth } from './services.mjs';
 import { createNews } from './news.mjs';
 import { createBluesky } from './bluesky.mjs';
 import { createAttention } from './attention.mjs';
+import { createExposure } from './exposure.mjs';
+import * as cases from './cases.mjs';
 import { createCves } from './cves.mjs';
+import { createAdPosture } from './adposture.mjs';
+import { createAttackPaths } from './attackpaths.mjs';
+import { createEntraPosture } from './entraposture.mjs';
+import { createM365Posture } from './m365posture.mjs';
 import { SessionStore, parseCookies, cookieHeader, SESSION_COOKIE, SESSION_TTL, PIM_GROUPS_URL, createAuth } from './auth.mjs';
 import { createManagedIdentity } from './identity.mjs';
 
@@ -40,7 +48,7 @@ export function summarize(r) {
     build: inv.os ? `${inv.os.build}.${inv.os.ubr ?? 0}` : null, summary: r.summary };
 }
 
-export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript, serviceHealth, news, bluesky, attention, cves } = {}) {
+export function createApp({ config = loadConfig(process.env, root), store, auth, sessions = new SessionStore(), now = () => Date.now(), clientScript, serviceHealth, news, bluesky, attention, exposure, cves, adposture, attackpaths, entraposture, m365posture } = {}) {
   store ??= config.data.kind === 'github' ? createGitHubStore(config.data) : createLocalStore(config.data.dir);
   // One managed identity (id-heatmap360) for sign-in and for Microsoft 365 service health. Only present when hosted.
   const miToken = config.entra && process.env.IDENTITY_ENDPOINT ? createManagedIdentity({ clientId: config.entra.miClientId }) : null;
@@ -50,6 +58,10 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
   bluesky ??= createBluesky();
   cves ??= createCves();
   attention ??= createAttention({ news, serviceHealth });
+  adposture ??= createAdPosture({ dir: config.adposture?.dir });
+  attackpaths ??= createAttackPaths({ dir: config.attackpaths?.dir });
+  entraposture ??= createEntraPosture({ dir: config.entraposture?.dir });
+  m365posture ??= createM365Posture({ dir: config.m365posture?.dir });
   clientScript ??= readFileSync(path.join(root, 'client', 'Invoke-HeatMapScan.ps1'), 'utf8');
   const limiter = createLimiter({ now, rules: [{ windowMs: 600_000, limit: config.limits.perIp10Min }, { windowMs: 86_400_000, limit: config.limits.perIpDay }] });
   const globalLimiter = createLimiter({ now, rules: [{ windowMs: 86_400_000, limit: config.limits.globalDay }] });
@@ -60,6 +72,13 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
     if (r) { if (results.size > 2000) results.clear(); results.set(id, r); }
     return r;
   }
+
+  // The newest 200 processed scans (the same window as the Scans page), for "Are we affected?".
+  async function recentResults() {
+    const done = await store.list('results');
+    return (await Promise.all(done.slice(-200).map(n => result(n.slice(0, -5)).catch(() => null)))).filter(Boolean);
+  }
+  exposure ??= createExposure({ attention, loadScans: recentResults, now });
 
   const app = express();
   app.disable('x-powered-by');
@@ -126,7 +145,7 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
     } catch (e) { next(e); }
   });
 
-  // The uploader's token unlocks only that scan's status and PDF.
+  // The uploader's token unlocks only that scan's status and .mhtml results.
   async function uploaderRecord(req) {
     const id = req.params.id;
     if (!ID.test(id)) throw err(404, 'Scan not found.');
@@ -139,11 +158,11 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
   app.get('/api/scans/:id/status', async (req, res, next) => {
     try { const { result: r } = await uploaderRecord(req); res.json({ state: r ? (r.rejected ? 'rejected' : 'done') : 'queued', ...(r?.rejected ? { reason: r.rejected } : {}) }); } catch (e) { next(e); }
   });
-  app.get('/api/scans/:id/report.pdf', async (req, res, next) => {
+  app.get('/api/scans/:id/report.mhtml', async (req, res, next) => {
     try {
       const { id, result: r } = await uploaderRecord(req);
       if (!r) throw err(409, 'Results are not ready yet.');
-      res.type('application/pdf').attachment(`HeatMap360-${id}.pdf`).send(await renderReport(r));
+      res.attachment(`HeatMap360-${id}.mhtml`).send(renderReport(r));
     } catch (e) { next(e); }
   });
 
@@ -243,6 +262,126 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
   app.get('/api/admin/attention', requireAdmin, async (req, res, next) => {
     try { res.json(await attention()); } catch (e) { next(e); }
   });
+  // "Are we affected?": each High impact exploit matched against the newest scan of every scanned computer.
+  app.get('/api/admin/exposure', requireAdmin, async (req, res, next) => {
+    try { res.json(await exposure({ fresh: req.query.fresh === '1' })); } catch (e) { next(e); }
+  });
+  // Inventory catalog: every item version once, with lookups and history (bot/catalog.mjs). The findings job writes the
+  // snapshot after each run; until then the page says so.
+  const PRODUCTS = 'settings/products.json';
+  const productChoices = async () => { const p = await store.get(PRODUCTS); return p?.schema === 'hm360.products/1' && p.choices && typeof p.choices === 'object' ? p : { choices: {} }; };
+  app.get('/api/admin/catalog', requireAdmin, async (req, res, next) => {
+    try {
+      const [snap, p] = await Promise.all([store.get('catalog/catalog.json'), productChoices()]);
+      const out = snap?.schema === 'hm360.catalog/1' && Array.isArray(snap.items) ? snap : { schema: 'hm360.catalog/1', generatedAt: null, machines: 0, versions: 0, items: [] };
+      // The newest choices, even before the findings job has run again.
+      for (const it of out.items) if (it.product?.key && Object.hasOwn(p.choices, it.product.key)) it.product.choice = p.choices[it.product.key];
+      res.json(out);
+    } catch (e) { next(e); }
+  });
+  // Confirm a proposed NVD product for an item (cpe "a:vendor:product") or say it is not this product (cpe null). The
+  // findings job uses the choice on its next run. Elevated admins only, with the CSRF token.
+  const PRODUCT_KEY = /^(app|bios|driver|network-adapter)\|[a-z0-9+#\- ]{0,160}\|[a-z0-9+#\-]{0,40}$/;
+  const CPE = /^[aoh]:[a-z0-9][a-z0-9._\-~%!+\\/]{0,99}:[a-z0-9][a-z0-9._\-~%!+\\/]{0,99}$/i;
+  app.put('/api/admin/catalog/products', requireAdmin, csrfIfSession, express.json({ limit: '2kb', type: ['application/json'] }), async (req, res, next) => {
+    try {
+      const { key, cpe, ...rest } = req.body || {};
+      if (Object.keys(rest).length || typeof key !== 'string' || !PRODUCT_KEY.test(key) || !(cpe === null || (typeof cpe === 'string' && CPE.test(cpe)))) return res.status(400).json({ error: 'Send a product key and a product name such as a:vendor:product, or null.' });
+      const p = await productChoices();
+      const choices = { ...p.choices, [key]: cpe };
+      if (Object.keys(choices).length > 5000) return res.status(400).json({ error: 'Too many product choices.' });
+      const value = { schema: 'hm360.products/1', choices, updatedAt: new Date(now()).toISOString(), updatedBy: req.session?.user?.upn || (config.devAdmin ? 'local developer' : null) };
+      await store.put(PRODUCTS, value, 'hm360: product choice');
+      res.json({ key, cpe, updatedAt: value.updatedAt });
+    } catch (e) { next(e); }
+  });
+  // ---------- incident cases (server/cases.mjs) ----------
+  // Elevated admins open and run cases; every change is on the case's timeline and needs the case's current version,
+  // so two people cannot overwrite each other. Closed cases are locked.
+  const who = req => req.session?.user?.upn || req.session?.user?.name || (config.devAdmin ? 'local developer' : 'unknown');
+  const caseJson = express.json({ limit: '32kb', type: ['application/json'] });
+  async function loadCase(id) {
+    if (!cases.CASE_ID.test(id)) throw err(404, 'Case not found.');
+    const c = await store.get(`cases/${id}.json`);
+    if (!c) throw err(404, 'Case not found.');
+    return c;
+  }
+  const checkVersion = (c, body) => { if (body?.version !== c.version) throw err(409, 'Someone changed this case since you opened it. Reload the page and try again.'); };
+  // Evidence snapshot: the item as HeatMap 360 sees it right now, so it can be shown unchanged later.
+  async function evidenceFrom(body) {
+    if (body?.kind === 'high-impact') {
+      const [att, exp] = await Promise.all([attention(), exposure().catch(() => null)]);
+      const item = att.items.find(i => i.id === body.itemId);
+      if (!item) throw err(404, 'That item is no longer on the High impact list.');
+      const m = exp?.items.find(i => i.id === item.id);
+      const { kev, ...shown } = item;
+      return { kind: 'high-impact', label: `High impact: ${item.title}`.slice(0, 200), item,
+        data: { capturedAt: new Date(now()).toISOString(), highImpact: shown, affected: m ? { call: m.call, counts: m.counts, machines: m.machines.filter(x => x.verdict !== 'clear') } : null } };
+    }
+    if (body?.kind === 'scan') {
+      if (!ID.test(body.scanId || '')) throw err(404, 'Scan not found.');
+      const r = await result(body.scanId);
+      if (!r) throw err(404, 'Scan not found.');
+      const pick = l => (l || []).map(c => ({ cveID: c.cveID, product: c.app || c.product, version: c.version ?? null, verdict: c.verdict ?? null }));
+      return { kind: 'scan', label: `Scan ${r.id}${summarize(r).computer ? ` (${summarize(r).computer})` : ''}`,
+        data: { capturedAt: new Date(now()).toISOString(), scan: summarize(r), exploited: { affected: pick(r.exploited?.affected), unverified: pick(r.exploited?.unverified) } } };
+    }
+    if (body?.kind === 'note') {
+      const t = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!t || t.length > 8000) throw err(400, 'Evidence text: 1 to 8000 characters.');
+      return { kind: 'note', label: typeof body.label === 'string' && body.label.trim() ? body.label : 'Written evidence', data: { capturedAt: new Date(now()).toISOString(), text: t } };
+    }
+    throw err(400, 'Evidence kind must be high-impact, scan or note.');
+  }
+  app.get('/api/admin/cases', requireAdmin, async (req, res, next) => {
+    try {
+      const names = (await store.list('cases')).slice(-300).reverse();
+      const rows = (await Promise.all(names.map(n => store.get(`cases/${n}`).then(c => (c ? cases.summary(c) : null)).catch(() => null)))).filter(Boolean);
+      rows.sort((a, b) => (a.status === b.status ? 0 : a.status === 'open' ? -1 : 1) || b.updatedAt.localeCompare(a.updatedAt));
+      res.json({ cases: rows, reference: cases.reference() });
+    } catch (e) { next(e); }
+  });
+  app.post('/api/admin/cases', requireAdmin, csrfIfSession, caseJson, async (req, res, next) => {
+    try {
+      const b = req.body || {};
+      const ev = b.fromItem ? await evidenceFrom({ kind: 'high-impact', itemId: b.fromItem }) : null;
+      const type = b.type || (ev ? (ev.item.kind === 'disruption' ? 'disruption' : 'exploited-vuln') : null);
+      const c = cases.newCase({ title: b.title || ev?.item.title, type, by: who(req), now: now(), source: ev ? { kind: 'high-impact', ref: ev.item.id } : null });
+      if (ev) cases.addEvidence(c, { label: ev.label, kind: ev.kind, data: ev.data, by: who(req), now: now() });
+      await store.put(`cases/${c.id}.json`, c, `Case ${c.id} opened`);
+      res.status(201).json(cases.view(c));
+    } catch (e) { next(e); }
+  });
+  app.get('/api/admin/cases/:id', requireAdmin, async (req, res, next) => {
+    try { res.json({ ...cases.view(await loadCase(req.params.id)), reference: cases.reference() }); } catch (e) { next(e); }
+  });
+  app.post('/api/admin/cases/:id/actions', requireAdmin, csrfIfSession, caseJson, async (req, res, next) => {
+    try {
+      const c = await loadCase(req.params.id);
+      checkVersion(c, req.body);
+      cases.applyAction(c, req.body, { by: who(req), now: now() });
+      await store.put(`cases/${c.id}.json`, c, `Case ${c.id}: ${req.body.action}`);
+      res.json(cases.view(c));
+    } catch (e) { next(e); }
+  });
+  app.post('/api/admin/cases/:id/evidence', requireAdmin, csrfIfSession, caseJson, async (req, res, next) => {
+    try {
+      const c = await loadCase(req.params.id);
+      checkVersion(c, req.body);
+      if (c.status === 'closed') throw err(409, 'This case is closed and locked.');
+      const ev = await evidenceFrom(req.body);
+      cases.addEvidence(c, { label: ev.label, kind: ev.kind, data: ev.data, by: who(req), now: now() });
+      c.updatedAt = new Date(now()).toISOString(); c.updatedBy = who(req); c.version += 1;
+      await store.put(`cases/${c.id}.json`, c, `Case ${c.id}: evidence`);
+      res.json(cases.view(c));
+    } catch (e) { next(e); }
+  });
+  app.get('/api/admin/cases/:id/report.pdf', requireAdmin, async (req, res, next) => {
+    try {
+      const c = await loadCase(req.params.id);
+      res.type('application/pdf').attachment(`HeatMap360-case-${c.id}.pdf`).send(await cases.renderCaseReport(c));
+    } catch (e) { next(e); }
+  });
   // Bluesky page: latest posts from the listed official vendor accounts (free public API, read only), cached 15 minutes.
   app.get('/api/admin/bluesky', requireAdmin, async (req, res, next) => {
     try { res.json(await bluesky.feed()); } catch (e) { next(e); }
@@ -255,12 +394,64 @@ export function createApp({ config = loadConfig(process.env, root), store, auth,
       res.json(out);
     } catch (e) { next(e.status ? e : err(502, 'Could not read the replies from Bluesky.')); }
   });
-  app.get('/api/admin/scans/:id/report.pdf', requireAdmin, async (req, res, next) => {
+  // AD posture page: PingCastle scores over time, read from the local AD posture folder (never from the data repo).
+  app.get('/api/admin/adposture', requireAdmin, async (req, res, next) => {
+    try { res.json(await adposture.list()); } catch (e) { next(e); }
+  });
+  // PingCastle's own HTML report, only as a download (it carries its own scripts, which this site's CSP would block).
+  app.get('/api/admin/adposture/:id/report.html', requireAdmin, async (req, res, next) => {
+    try {
+      const html = await adposture.report(req.params.id);
+      if (!html) throw err(404, 'Report not found.');
+      res.type('text/html').attachment(`PingCastle-${req.params.id}.html`).send(html);
+    } catch (e) { next(e); }
+  });
+  // Attack paths page: BloodHound CE summaries, read from the local attack paths folder (never from the data repo).
+  app.get('/api/admin/attackpaths', requireAdmin, async (req, res, next) => {
+    try { res.json(await attackpaths.list()); } catch (e) { next(e); }
+  });
+  // AD Miner's report of the same data: a zip of HTML pages with their own scripts, so it is only offered as a download.
+  app.get('/api/admin/attackpaths/adminer/:id/report.zip', requireAdmin, async (req, res, next) => {
+    try {
+      const zip = await attackpaths.reportZip(req.params.id);
+      if (!zip) throw err(404, 'Report not found.');
+      const file = await open(zip.file, 'r'); // fails here, before any header is set, when the file cannot be read
+      res.type('application/zip').attachment(`ADMiner-${req.params.id}.zip`).set('Content-Length', String(zip.size));
+      // Streamed, not read into memory: a big domain's report can be hundreds of MB. pipeline() also closes the file when
+      // the browser stops early; a failure part-way through cuts the connection, which the page reports as a failed download.
+      pipeline(file.createReadStream(), res, () => {});
+    } catch (e) { next(e); }
+  });
+  // Entra posture page: Maester results over time, read from the local Entra posture folder (never from the data repo).
+  app.get('/api/admin/entraposture', requireAdmin, async (req, res, next) => {
+    try { res.json(await entraposture.list()); } catch (e) { next(e); }
+  });
+  // Maester's own HTML report, only as a download (it carries its own scripts, which this site's CSP would block).
+  app.get('/api/admin/entraposture/:id/report.html', requireAdmin, async (req, res, next) => {
+    try {
+      const html = await entraposture.report(req.params.id);
+      if (!html) throw err(404, 'Report not found.');
+      res.type('text/html').attachment(`Maester-${req.params.id}.html`).send(html);
+    } catch (e) { next(e); }
+  });
+  // M365 & Azure posture page: Monkey365 results over time, read from the local M365 posture folder (never the data repo).
+  app.get('/api/admin/m365posture', requireAdmin, async (req, res, next) => {
+    try { res.json(await m365posture.list()); } catch (e) { next(e); }
+  });
+  // Monkey365's own HTML report for one area, only as a download (it loads its own scripts, which this site's CSP blocks).
+  app.get('/api/admin/m365posture/:id/:area.html', requireAdmin, async (req, res, next) => {
+    try {
+      const html = await m365posture.report(req.params.id, req.params.area);
+      if (!html) throw err(404, 'Report not found.');
+      res.type('text/html').attachment(`Monkey365-${req.params.id}-${req.params.area}.html`).send(html);
+    } catch (e) { next(e); }
+  });
+  app.get('/api/admin/scans/:id/report.mhtml', requireAdmin, async (req, res, next) => {
     try {
       if (!ID.test(req.params.id)) throw err(404, 'Scan not found.');
       const r = await result(req.params.id);
       if (!r) throw err(404, 'Scan not found or not processed yet.');
-      res.type('application/pdf').attachment(`HeatMap360-${r.id}.pdf`).send(await renderReport(r));
+      res.attachment(`HeatMap360-${r.id}.mhtml`).send(renderReport(r));
     } catch (e) { next(e); }
   });
 

@@ -1,5 +1,6 @@
 // BIOS/UEFI firmware status. HP and Lenovo publish machine-readable catalogs that their own update tools read
-// (HP Image Assistant reference files, Lenovo System Update catalogs); the bot reads the newest BIOS from those.
+// (HP Image Assistant reference files, Lenovo System Update catalogs, Dell Command Update catalogs); the bot reads the
+// newest BIOS from those.
 // Other makers get the BIOS age and a link to their official support site. A lookup that fails says so.
 //
 // URLs: only the model code from the upload goes into a catalog URL, and only after it matches a strict pattern
@@ -96,7 +97,47 @@ async function lenovoLatest(inv, get) {
   return { latest: { ...best, link: `https://pcsupport.lenovo.com/products/${m[1].toLowerCase()}/downloads` }, source: url };
 }
 
-const LOOKUPS = { hp: hpLatest, lenovo: lenovoLatest };
+// ---------------------------------------------------------------- Dell (Dell Command Update catalogs)
+// CatalogIndexPC.cab lists one catalog per model, keyed by the 4-hex system ID that Windows reports as the system SKU
+// (scanner 1.4.0). sources.vendorFile() unpacks the .cab and returns the XML text.
+export const DELL_INDEX = 'https://downloads.dell.com/catalog/CatalogIndexPC.cab';
+const DELL_PATH = /^FOLDER\d+M\/\d+\/[A-Za-z0-9._-]+\.cab$/;
+const tagged = (xml, tag) => [...String(xml).matchAll(new RegExp(`<${tag}\\b([^>]*)>([\\s\\S]*?)</${tag}>`, 'g'))].map(m => ({ attrs: m[1], body: m[2] }));
+const attr = (attrs, name) => { const m = String(attrs).match(new RegExp(`\\b${name}="([^"]*)"`)); return m ? text(m[1]) : null; };
+export function dellModelPath(indexXml, sku) {
+  for (const g of tagged(indexXml, 'GroupManifest')) {
+    if (!new RegExp(`<Model\\b[^>]*systemID="${sku}"`, 'i').test(g.body)) continue;
+    const info = tagged(g.body, 'ManifestInformation')[0] || { attrs: (g.body.match(/<ManifestInformation\b([^>]*)/) || [])[1] || '' };
+    const p = attr(info.attrs, 'path');
+    if (p && DELL_PATH.test(p)) return p;
+  }
+  return null;
+}
+export function parseDellBios(modelXml, sku) {
+  return tagged(modelXml, 'SoftwareComponent')
+    .filter(c => /<ComponentType\b[^>]*value="BIOS"/i.test(c.body) && new RegExp(`<Model\\b[^>]*systemID="${sku}"`, 'i').test(c.body))
+    .map(c => ({ version: attr(c.attrs, 'vendorVersion'), date: isoDay(attr(c.attrs, 'releaseDate')) || isoDay(attr(c.attrs, 'dateTime')),
+      name: ((c.body.match(/<Name>\s*<Display[^>]*>(?:<!\[CDATA\[)?([^\]<]*)/) || [])[1] || '').trim() || null,
+      releaseID: attr(c.attrs, 'releaseID') }))
+    .filter(b => b.version);
+}
+async function dellLatest(inv, get) {
+  const sku = String(inv.hardware?.system?.sku || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{4}$/.test(sku)) return { error: 'The scan did not report a Dell system ID (scanner 1.4.0 or later sends it), so Dell\'s catalog could not be read.' };
+  const index = await get(DELL_INDEX);
+  if (index == null) return { error: 'Dell\'s catalog index could not be found.', source: DELL_INDEX };
+  const p = dellModelPath(index, sku);
+  if (!p) return { error: `Dell's catalog has no entry for system ID ${sku}; check Dell's support site.`, source: DELL_INDEX };
+  const url = `https://downloads.dell.com/${p}`;
+  const xml = await get(url);
+  if (xml == null) return { error: 'Dell\'s catalog for this model could not be found.', source: url };
+  const bios = parseDellBios(xml, sku).sort((a, b) => compareVersions(dotted(a.version) ?? a.version, dotted(b.version) ?? b.version));
+  if (!bios.length) return { error: 'Dell\'s catalog for this model lists no BIOS.', source: url };
+  const b = bios.at(-1);
+  return { latest: { version: b.version, date: b.date, name: b.name, link: b.releaseID && /^[A-Z0-9]{5}$/.test(b.releaseID) ? `https://www.dell.com/support/home/drivers/driversdetails?driverid=${b.releaseID.toLowerCase()}` : 'https://www.dell.com/support/home' }, source: url };
+}
+
+const LOOKUPS = { hp: hpLatest, lenovo: lenovoLatest, dell: dellLatest };
 
 // Installed version in the vendor's own numbering: Lenovo "N32ET86W (1.62 )" -> 1.62, HP "T70 Ver. 01.15.00" -> 01.15.00.
 export function installedBiosVersion(vendorKey, version) {
@@ -139,7 +180,7 @@ export async function firmwareStatus(inv, get, now = Date.now()) {
     }
     r = { error: 'The installed and newest BIOS versions could not be compared.', source: r.source };
   }
-  const why = r?.error || (vendor ? `HeatMap 360 can look up BIOS updates automatically for HP and Lenovo; check ${vendor.name}'s support site for this model.`
+  const why = r?.error || (vendor ? `HeatMap 360 can look up BIOS updates automatically for HP, Lenovo and Dell; check ${vendor.name}'s support site for this model.`
     : 'The computer maker was not recognised; check the maker\'s support site for this model.');
   const old = ageYears != null && ageYears > 3;
   return { ...base, status: 'not-checked', grade: old ? 'warn' : 'unknown', source: r?.source ?? null,

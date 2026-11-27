@@ -1,0 +1,3 @@
+# Reviewed false positives (gitleaks fingerprints). Add a line only after checking the match is not a secret.
+# public/nav-sections.js: NAV_COLLAPSE_KEY is a browser storage key name ("e360.nav.collapsed"), not a key.
+3570a48a73506db04e27f3d8433d6821149c6042:public/nav-sections.js:generic-api-key:3

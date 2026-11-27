@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   HeatMap 360 scanner: inventories THIS Windows computer and removes personal data (step 1, nothing is sent), then
-  uploads the saved file to HeatMap 360 and saves the results as a PDF when they are ready (step 2, -Upload).
+  uploads the saved file to HeatMap 360 and saves the results as one .mhtml file (opens in Edge or Chrome) when they are ready (step 2, -Upload).
   Read-only: it never installs, updates or changes anything.
 .DESCRIPTION
   What is collected: Windows version, build and installed updates; installed programs and their versions (and winget
@@ -12,7 +12,8 @@
   power/offload settings, and the Wi-Fi signal strength, band and standard; disk health (wear, temperature,
   uncorrected errors) and battery health; network health: ping time and loss to this computer's gateway, connection
   time to the internet, DNS lookup time, and download/upload speed measured against Cloudflare's public speed test
-  (speed.cloudflare.com, about 35 MB; skip it with -SkipSpeedTest).
+  (speed.cloudflare.com, about 35 MB; skip it with -SkipSpeedTest). It asks Windows Update which driver and firmware
+  updates it offers this computer (search only: nothing is downloaded or installed; skip it with -SkipDriverUpdates).
   What is NOT collected: computer name, user names, domain, IP or MAC addresses, Wi-Fi network names, serial
   numbers, event log messages, the gateway's or any other address, file paths or documents. The computer is identified only by a one-way hash of its Windows MachineGuid, so two scans of the same
   computer can be compared without revealing which computer it is.
@@ -22,11 +23,12 @@
   Works in Windows PowerShell 5.1 and PowerShell 7. Run it elevated to include BitLocker and Secure Boot.
 .EXAMPLE
   .\Invoke-HeatMapScan.ps1                         # step 1: scan and save the anonymized file; nothing is sent
-  .\Invoke-HeatMapScan.ps1 -Upload                 # step 2: upload the newest saved file and wait for the PDF
+  .\Invoke-HeatMapScan.ps1 -Upload                 # step 2: upload the newest saved file and wait for the results (.mhtml)
   .\Invoke-HeatMapScan.ps1 -Upload -Path <file>    # step 2 for a specific saved file
   .\Invoke-HeatMapScan.ps1 -ScanAndUpload          # both steps in one go
   .\Invoke-HeatMapScan.ps1 -SkipSpeedTest          # leave out the download/upload speed test (about 35 MB)
-  .\Invoke-HeatMapScan.ps1 -Resume <scan id>       # fetch the PDF of an earlier upload
+  .\Invoke-HeatMapScan.ps1 -SkipDriverUpdates      # leave out the Windows Update driver search (30 to 90 seconds)
+  .\Invoke-HeatMapScan.ps1 -Resume <scan id>       # fetch the results (.mhtml) of an earlier upload
 #>
 [CmdletBinding(DefaultParameterSetName = 'Scan')]
 param(
@@ -34,6 +36,7 @@ param(
     [Parameter(ParameterSetName = 'Scan')][switch]$ScanAndUpload,
     [Parameter(ParameterSetName = 'Scan')][switch]$SaveOnly,   # kept for older commands: scanning only is now the default
     [Parameter(ParameterSetName = 'Scan')][switch]$SkipSpeedTest,
+    [Parameter(ParameterSetName = 'Scan')][switch]$SkipDriverUpdates,
     [Parameter(ParameterSetName = 'Upload', Mandatory)][switch]$Upload,
     [Parameter(ParameterSetName = 'Upload')][string]$Path,
     [Parameter(ParameterSetName = 'Resume', Mandatory)][string]$Resume,
@@ -54,7 +57,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     & $ps64 @relaunch
     exit $LASTEXITCODE
 }
-$ClientVersion = '1.3.0'
+$ClientVersion = '1.4.0'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $null = New-Item -ItemType Directory -Path $OutputFolder -Force
 
@@ -119,7 +122,9 @@ function Get-Inventory {
     $inv.health = $health
 
     $hw = [ordered]@{}
-    $hw.system = Part 'system' { $cs = Get-CimInstance Win32_ComputerSystem; [ordered]@{ manufacturer = $cs.Manufacturer; model = $cs.Model; family = (Get-Prop $cs 'SystemFamily') } }
+    $hw.system = Part 'system' { $cs = Get-CimInstance Win32_ComputerSystem; [ordered]@{ manufacturer = $cs.Manufacturer; model = $cs.Model; family = (Get-Prop $cs 'SystemFamily')
+        # Dell's 4-hex system ID (a model number, not a serial) picks the model's catalog. Sent for Dell only.
+        sku = $(if ("$($cs.Manufacturer)" -match '^Dell') { Get-Prop $cs 'SystemSKUNumber' } else { $null }) } }
     $hw.memoryGB = Part 'memory' { [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1) }
     $hw.bios = Part 'bios' { $b = Get-CimInstance Win32_BIOS; [ordered]@{ vendor = $b.Manufacturer; version = $b.SMBIOSBIOSVersion; releaseDate = (Get-Day $b.ReleaseDate) } }
     $hw.baseboard = Part 'baseboard' { $m = Get-CimInstance Win32_BaseBoard; [ordered]@{ manufacturer = $m.Manufacturer; product = $m.Product; version = $m.Version } }
@@ -158,6 +163,17 @@ function Get-Inventory {
             }
     })
     $inv.hardware = $hw
+
+    # Windows Update: which driver and firmware updates it offers this computer. Search only; nothing is downloaded or
+    # installed. The bot matches each offer to the installed device by its model name.
+    if (-not $SkipDriverUpdates) {
+        $inv.driverUpdates = Part 'driverUpdates' {
+            $found = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")
+            [ordered]@{ checked = $true; updates = @($found.Updates | Select-Object -First 200 | ForEach-Object {
+                [ordered]@{ title = $_.Title; model = (Get-Prop $_ 'DriverModel'); manufacturer = (Get-Prop $_ 'DriverManufacturer'); provider = (Get-Prop $_ 'DriverProvider')
+                    class = (Get-Prop $_ 'DriverClass'); date = (Get-Day (Get-Prop $_ 'DriverVerDate')) } }) }
+        }
+    }
 
     # Event log: counts per component and event ID for the last 7 days. The message text is never read, because it
     # can contain names and paths.
@@ -336,10 +352,10 @@ function Save-Report([string]$Id, [string]$Token) {
     while ($true) {
         $status = Invoke-RestMethod -Uri "$Server/api/scans/$Id/status" -Headers $headers -UseBasicParsing
         if ($status.state -eq 'done') {
-            $pdf = Join-Path $OutputFolder "HeatMap360-$Id.pdf"
-            Invoke-WebRequest -Uri "$Server/api/scans/$Id/report.pdf" -Headers $headers -OutFile $pdf -UseBasicParsing
-            Write-Host "Results saved: $pdf"
-            return $pdf
+            $file = Join-Path $OutputFolder "HeatMap360-$Id.mhtml"
+            Invoke-WebRequest -Uri "$Server/api/scans/$Id/report.mhtml" -Headers $headers -OutFile $file -UseBasicParsing
+            Write-Host "Results saved: $file (open it in Edge or Chrome)"
+            return $file
         }
         if ((Get-Date) -gt $deadline) {
             Write-Host "Results are not ready yet (state: $($status.state)). Fetch them later with:"
@@ -354,7 +370,7 @@ function Send-Inventory([string]$File) {
     $json = [IO.File]::ReadAllText($File, [Text.UTF8Encoding]::new($false))
     Write-Host "Uploading $File ..."
     $resp = Invoke-RestMethod -Method Post -Uri "$Server/api/scans" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -UseBasicParsing
-    # The token is the only way to get this scan's PDF. Keep it with the inventory, readable by this user only.
+    # The token is the only way to get this scan's results file. Keep it with the inventory, readable by this user only.
     $ticket = Join-Path $OutputFolder "scan-$($resp.id).json"
     [ordered]@{ id = $resp.id; token = $resp.token; server = $Server; sentAt = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $ticket -Encoding UTF8
     Write-Host "Sent. Scan ID: $($resp.id)"

@@ -83,7 +83,7 @@ test('server: Cloudflare Radar CVEs page is admin only', async () => {
 test('UI: Cloudflare Radar CVEs sits under Internet - Exploits in Results and is routed', async () => {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(html, /Internet - Exploits<\/a>\n\s*<a class="nav-item sub" href="#cves" data-route="cves"><span data-nav-icon="shield-alert"><\/span>Cloudflare Radar CVEs<\/a>/);
+  assert.match(html, /Internet - Exploits<\/a>\r?\n\s*<a class="nav-item sub" href="#cves" data-route="cves"><span data-nav-icon="shield-alert"><\/span>Cloudflare Radar CVEs<\/a>/);
   assert.match(app, /name === 'cves' \? await viewCves\(\)/);
   assert.match(app, /api\('\/api\/admin\/cves'\)/);
 });

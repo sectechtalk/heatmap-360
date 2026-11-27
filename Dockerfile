@@ -1,5 +1,6 @@
-# HeatMap 360 web app (upload API, results pages, PDF). The bot does NOT run here: it runs on the admin's desktop as a
-# GitHub Actions self-hosted runner job in hm-360-data. Settings and the GitHub token come from Container Apps env vars
+# HeatMap 360 web app (upload API, results pages, .mhtml results, case review PDF). The bot does NOT run here: it runs on the admin's desktop as a
+# GitHub Actions self-hosted runner job in hm-360-data. Its matching code (bot/) is copied in because "Are we affected?"
+# reuses the same KEV and CVE version checks. Settings and the GitHub token come from Container Apps env vars
 # and secret refs at run time, never from the image.
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production PORT=3460 HM360_BIND=0.0.0.0
@@ -7,6 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY server ./server
+COPY bot ./bot
 COPY public ./public
 COPY client ./client
 USER node

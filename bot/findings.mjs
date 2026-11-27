@@ -6,13 +6,20 @@
 //                  of that machine updates the row (LastSeen, version...). Items gone from the newest scan get Removed=true.
 //   One extra row per machine (RowKey "machine", Category "Machine") holds the newest scan's summary.
 //
+// Items with a version (software, drivers, firmware, the Windows build, disks, CPUs...) are de-duplicated: the machine
+// row is only a pointer (CatalogRK + InstalledVersion), and the item version itself, with its lookup answer, is stored
+// once in the inventory catalog (partition catalog-<kind>, see bot/catalog.mjs). Install history (installed, changed
+// version, removed) and check history (newly exploited, new known problem, update available...) are kept as rows too,
+// written only when something changes.
+//
 // Category is the coarse group for filtering (Windows, Patch, Application, Firmware, Driver, Hardware, Disk, Network,
 // Security, Events, Scan); Kind is the exact type (os, windows-update, app, winget-package, bios, ...).
 //
-// A background job looks each distinct item (Kind + item + version, across all machines) up with the official sources
-// the bot already uses (Microsoft release health, winget catalog and publisher release notes, CISA KEV checked against
-// CVE records, HP/Lenovo catalogs) and writes the answer onto every row of that item: Status, LatestVersion,
-// KnownIssues, ExploitedCVEs. Rechecked after `maxAgeHours`, capped per run; a failed lookup marks only that item.
+// A background job looks each catalog row (one item version, across all machines) up with the official sources the bot
+// already uses (Microsoft release health, winget catalog and publisher release notes, CISA KEV checked against CVE
+// records, HP/Lenovo catalogs) and writes the answer onto that one row: Status, LatestVersion, KnownIssues,
+// ExploitedCVEs. Rechecked after `maxAgeHours`, capped per run; a failed lookup keeps the last good answer.
+// After each run it writes catalog/catalog.json (the Inventory catalog page) into --snapshot, else the first --repo.
 //
 // Reads the bot's results/*.json (each holds the scan's inventory and the bot's verdicts). Read-only toward computers
 // and the data repositories. Sign-in: Entra (`--credential cli`, the default: the desktop's `az login`, never a machine
@@ -21,11 +28,12 @@
 //
 //   node bot/findings.mjs --repo <folder with results/> [--repo ...] [--account <name>] [--table findings] [--credential cli]
 //                         [--import-only|--lookup-only] [--limit 40] [--max-age-hours 24] [--cache <folder>]
+//                         [--snapshot <folder>|--no-snapshot]
 // Where the table lives: --account/--table if given, else settings/findings.json in the first --repo that has one
 // (set by Settings Admins on the Settings page, so the storage can move without a code change), else
 // HM360_TABLES_ACCOUNT / HM360_TABLES_TABLE. The storage account itself is created by hand in Azure, never by code;
 // the job only creates the table inside it when missing.
-import { readFile, readdir, mkdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, rename } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +44,9 @@ import { firmwareStatus } from './firmware.mjs';
 import { kevCandidates } from './health.mjs';
 import { verifyCandidates } from './cve.mjs';
 import { knownIssuesSection } from './appissues.mjs';
+import { sortCves, productKey, matchProduct, createNvd } from './nvd.mjs';
+import { createMsrc } from './msrc.mjs';
+import { CATALOG_PREFIX, catalogRef, isCatalogItem, isCatalogRow, isInstallRow, splitDetail, installRow, answerChanges, historyRows, buildSnapshot } from './catalog.mjs';
 
 const ID = /^[0-9]{14}-[0-9a-f]{8}$/;
 const MACHINE = /^[0-9a-f]{16}$/;
@@ -117,8 +128,13 @@ export const CATEGORY = {
 };
 // Kinds the background job can look up with an official source. Everything else is a measurement or inventory that the
 // scan's own results page grades ("n/a"), or hardware with no official lookup yet ("not-checked").
-export const LOOKUP = new Set(['os', 'winget-package', 'app', 'bios']);
-const NO_SOURCE_YET = new Set(['driver', 'network-adapter', 'disk', 'cpu', 'baseboard']);
+export const LOOKUP = new Set(['os', 'winget-package', 'app', 'bios', 'driver', 'network-adapter']);
+const NO_SOURCE_YET = new Set(['disk', 'cpu', 'baseboard']);
+// Kinds whose CVEs come from NVD (product match + exact version). Windows itself uses the Security Update Guide (MSRC);
+// winget packages are the same software as the 'app' rows, so they are not checked twice.
+export const NVD_KINDS = new Set(['app', 'bios', 'driver', 'network-adapter']);
+// Versions answered before the CVE sources existed (or only from the bot's scan answer) get their CVE check next run.
+const CVE_KINDS = new Set([...NVD_KINDS, 'os']);
 const NOTE = {
   'windows-update': 'Covered by the Windows row: every cumulative update includes the earlier ones.',
   noSource: 'No official vendor lookup for this yet; it is stored for when one is added.',
@@ -245,6 +261,7 @@ const appNote = affected => affected.length
 export function headline(l) {
   if (l.exploitedCount > 0) return 'Exploited';
   if (l.lookup === 'unsupported') return 'Unsupported';
+  if (l.cveCount > 0) return 'Vulnerable';
   if (l.issueCount > 0) return 'Known problems';
   return { outdated: 'Outdated', current: 'Current', pending: 'Pending', failed: 'Lookup failed', 'not-checked': 'Not checked', 'not-found': 'Not checked' }[l.lookup] ?? 'Info';
 }
@@ -254,14 +271,32 @@ const lookupColumns = l => ({
   Status: headline(l), LookupStatus: l.lookup, LatestVersion: l.latest ?? null, LatestDate: l.latestDate ?? null,
   KnownIssueCount: l.issueCount ?? null, KnownIssues: l.issues ?? null, ExploitedCount: l.exploitedCount ?? null, ExploitedCVEs: l.exploited ?? null,
   Note: l.note ?? null, Source: l.source ?? null, LastChecked: l.checked ?? null,
+  CveCount: l.cveCount ?? null, CveMaxScore: l.cveMax ?? null, Cves: l.cves ?? null, CveSource: l.cveSource ?? null,
+  CvesChecked: l.cvesChecked ?? null, ProductKey: l.productKey ?? null, Cpe: l.cpe ?? null, CpeMatch: l.cpeMatch ?? null, CpeCandidates: l.cpeCandidates ?? null,
 });
 const columnsLookup = e => ({ lookup: e.LookupStatus, latest: e.LatestVersion, latestDate: e.LatestDate, issueCount: e.KnownIssueCount, issues: e.KnownIssues,
-  exploitedCount: e.ExploitedCount, exploited: e.ExploitedCVEs, note: e.Note, source: e.Source, checked: e.LastChecked });
+  exploitedCount: e.ExploitedCount, exploited: e.ExploitedCVEs, note: e.Note, source: e.Source, checked: e.LastChecked,
+  cveCount: e.CveCount, cveMax: e.CveMaxScore, cves: e.Cves, cveSource: e.CveSource, cvesChecked: e.CvesChecked, productKey: e.ProductKey, cpe: e.Cpe, cpeMatch: e.CpeMatch, cpeCandidates: e.CpeCandidates });
 
 // ---------- import ----------
 
 // result: one results/<id>.json written by the bot. Updates that machine's rows when the scan is newer than what the
-// table has. Returns the number of rows written (0 when skipped).
+// table has. Catalog items (software, drivers, firmware, Windows...) become a small pointer on the machine plus one
+// shared catalog row per item version (bot/catalog.mjs); a version change, a new item or a removed item adds an
+// install history row. Returns the number of rows written (0 when skipped).
+// The Windows Update driver offer for an installed device: same model name, and newer than what is installed (by the
+// version in the offer's title when there is one, else by date).
+export function offerFor(row, updates) {
+  const name = lower(row.name);
+  for (const u of updates) {
+    if (!u?.model || lower(u.model) !== name) continue;
+    const version = (String(u.title || '').match(/(\d+(?:\.\d+){1,})\s*$/) || [])[1] || null;
+    const newer = version && row.version ? compareVersions(version, row.version) > 0 : u.date && row.item_date ? u.date > row.item_date : true;
+    if (newer) return { version, date: u.date || null, title: u.title ? String(u.title).slice(0, 200) : null };
+  }
+  return null;
+}
+export const ROWS_VERSION = 2; // 2 = catalog layout; older machine rows are rewritten once from their newest scan
 export async function importResult(store, result) {
   if (result?.schema !== 'hm360.result/1' || !ID.test(result.id || '') || result.rejected || !result.inventory) return 0;
   const inv = result.inventory, pk = inv.machineId;
@@ -269,40 +304,90 @@ export async function importResult(store, result) {
   const seen = s(inv.collectedAt) || s(result.receivedAt);
   const existing = new Map((await store.partition(pk)).map(e => [e.rowKey, e]));
   const machine = existing.get('machine');
-  if (machine && (machine.LastSeen > seen || machine.ScanId === result.id || (machine.LastSeen === seen && machine.ScanId > result.id))) return 0;
+  const migrating = machine && machine.RowsVersion !== ROWS_VERSION;
+  if (machine && (machine.LastSeen > seen || (!migrating && (machine.ScanId === result.id || (machine.LastSeen === seen && machine.ScanId > result.id))))) return 0;
+  const firstScan = !machine;
+  const sameScan = machine?.ScanId === result.id;
 
   const rows = inventoryRows(inv);
   // Same item twice in one scan (two identical disks): number the extra ones.
   const used = new Map();
   for (const r of rows) { const n = (used.get(`${r.kind}\u0000${r.item_key}`) || 0) + 1; used.set(`${r.kind}\u0000${r.item_key}`, n); if (n > 1) r.item_key += `#${n}`; }
   const known = lookupsFromResult(result, rows);
-  // Newest answer anywhere in the table for the same item + version wins over this result's older one.
-  const shared = new Map();
-  if (rows.some(r => LOOKUP.has(r.kind))) {
-    for (const e of await store.query("LookupStatus ne 'pending' and LastChecked ne ''")) {
-      if (!LOOKUP.has(e.Kind) || !e.LastChecked) continue;
-      const g = gk(e.Kind, e.ItemKey, e.InstalledVersion);
-      if (!shared.has(g) || shared.get(g).checked < e.LastChecked) shared.set(g, columnsLookup(e));
-    }
-  }
-  const out = [], keys = new Set();
+  const catalog = new Map((await store.query(`PartitionKey ge '${CATALOG_PREFIX}' and PartitionKey lt '${CATALOG_PREFIX.slice(0, -1)}.'`))
+    .filter(isCatalogRow).map(e => [`${e.partitionKey}\u0000${e.rowKey}`, e]));
+
+  const out = [], keys = new Set(), catalogOut = new Map(), history = [];
   for (const r of rows) {
     const rk = rowKey(r.kind, r.item_key), prev = existing.get(rk), g = gk(r.kind, r.item_key, r.version);
     keys.add(rk);
-    let l = { lookup: r.lookup_status, note: r.lookup_note };
-    for (const cand of [known.get(g), shared.get(g)]) if (cand && (!l.checked || (cand.checked && cand.checked > l.checked))) l = cand;
-    out.push({ partitionKey: pk, rowKey: rk, Category: CATEGORY[r.kind] ?? 'Other', Kind: r.kind, ItemKey: r.item_key, Name: r.name, Vendor: r.vendor,
-      InstalledVersion: r.version, ItemDate: r.item_date, Detail: r.detail, ...lookupColumns(l),
-      FirstSeen: prev?.FirstSeen || seen, LastSeen: seen, ScanId: result.id, Removed: false });
+    const base = { partitionKey: pk, rowKey: rk, Category: CATEGORY[r.kind] ?? 'Other', Kind: r.kind, ItemKey: r.item_key, InstalledVersion: r.version,
+      FirstSeen: prev?.FirstSeen || seen, LastSeen: seen, ScanId: result.id, Removed: false };
+    if (!isCatalogItem(r)) {
+      // A fact about this one computer: kept on its own row, as before.
+      out.push({ ...base, Name: r.name, Vendor: r.vendor, ItemDate: r.item_date, Detail: r.detail, ...lookupColumns({ lookup: r.lookup_status, note: r.lookup_note }) });
+      continue;
+    }
+    const ref = catalogRef(r.kind, r.item_key, r.version), ck = `${ref.partitionKey}\u0000${ref.rowKey}`;
+    const detail = splitDetail(r.kind, r.detail);
+    out.push({ ...base, CatalogRK: ref.rowKey, ItemDate: r.item_date, Detail: detail.machine });
+    if (!firstScan && !sameScan) {
+      if (!prev || prev.Removed) history.push(installRow(pk, { pointerRK: rk, itemKey: r.item_key, kind: r.kind, change: 'installed', to: r.version, at: seen, scanId: result.id }));
+      else if ((prev.InstalledVersion ?? null) !== (r.version ?? null)) history.push(installRow(pk, { pointerRK: rk, itemKey: r.item_key, kind: r.kind, change: 'changed', from: prev.InstalledVersion ?? null, to: r.version, at: seen, scanId: result.id }));
+    }
+    // The shared catalog row: created once, then only its dates move. The answer comes from the newest of: what the
+    // catalog already has, what the bot answered for this scan, and (once, when moving to this layout) the answer an
+    // older machine row carried.
+    let row = catalogOut.get(ck) || catalog.get(ck);
+    if (!row) {
+      row = { ...ref, Category: CATEGORY[r.kind] ?? 'Other', Kind: r.kind, ItemKey: String(r.item_key).replace(/#\d+$/, ''), Name: r.name, Vendor: r.vendor, Version: r.version,
+        ItemDate: r.item_date, Detail: detail.catalog, FirstSeen: seen, LastSeen: seen, ...lookupColumns({ lookup: r.lookup_status, note: r.lookup_note }) };
+    } else row = { ...row, FirstSeen: row.FirstSeen && row.FirstSeen < seen ? row.FirstSeen : seen, LastSeen: row.LastSeen && row.LastSeen > seen ? row.LastSeen : seen };
+    const older = prev && prev.LastChecked && (prev.InstalledVersion ?? null) === (r.version ?? null) ? columnsLookup(prev) : null;
+    for (const cand of [known.get(g), older]) {
+      if (!cand?.checked || (row.LastChecked && cand.checked <= row.LastChecked)) continue;
+      const next = { ...row, ...lookupColumns(cand) };
+      history.push(...historyRows(row, answerChanges(row, next, row.Version), cand.checked));
+      row = next;
+    }
+    if ((r.kind === 'driver' || r.kind === 'network-adapter') && inv.driverUpdates?.checked) {
+      // Computers on the same driver version normally get the same offer. An offer is kept (the newest one wins); "no
+      // offer" clears it only when it comes from a scan newer than the one that saw the offer.
+      const o = offerFor(r, inv.driverUpdates.updates || []);
+      const had = row.OfferedVersion || row.OfferedDate;
+      let cols = null;
+      if (o && (!had || (o.version && row.OfferedVersion ? compareVersions(o.version, row.OfferedVersion) > 0 : (o.date || '') > (row.OfferedDate || '')))) cols = { OfferedVersion: o.version, OfferedDate: o.date, OfferedTitle: o.title };
+      else if (!o && had && seen > (row.OfferCheckedAt || '')) cols = { OfferedVersion: null, OfferedDate: null, OfferedTitle: null };
+      const first = !row.OfferCheckedAt;
+      row = { ...row, ...(cols || {}), OfferCheckedAt: row.OfferCheckedAt && row.OfferCheckedAt > seen ? row.OfferCheckedAt : seen, ...(cols || first ? { NeedsCheck: true } : {}) };
+    }
+    catalogOut.set(ck, row);
   }
-  for (const [rk, e] of existing) if (rk !== 'machine' && !keys.has(rk) && !e.Removed) out.push({ ...e, Removed: true });
+  for (const [rk, e] of existing) {
+    if (rk === 'machine' || isInstallRow(e) || keys.has(rk) || e.Removed) continue;
+    out.push({ ...e, Removed: true });
+    if (e.CatalogRK && !sameScan) history.push(installRow(pk, { pointerRK: rk, itemKey: e.ItemKey, kind: e.Kind, change: 'removed', from: e.InstalledVersion ?? null, at: seen, scanId: result.id }));
+  }
   const sys = inv.hardware?.system || {};
   out.push({ partitionKey: pk, rowKey: 'machine', Category: 'Machine', Kind: 'machine', ItemKey: 'machine', Name: [sys.manufacturer, sys.model].filter(Boolean).join(' ') || null,
     InstalledVersion: inv.os?.build ? `${inv.os.build}.${inv.os.ubr ?? 0}` : null, Status: result.summary?.overall ?? null,
     Detail: json({ summary: result.summary, clientVersion: inv.clientVersion, botVersion: result.botVersion, receivedAt: result.receivedAt }),
-    FirstSeen: machine?.FirstSeen || seen, LastSeen: seen, ScanId: result.id, Removed: false });
-  await store.upsert(out);
-  return out.length;
+    FirstSeen: machine?.FirstSeen || seen, LastSeen: seen, ScanId: result.id, Removed: false, RowsVersion: ROWS_VERSION });
+  await store.upsert([...catalogOut.values(), ...history, ...out]);
+  return out.length + catalogOut.size + history.length;
+}
+
+// A machine's items with their catalog answers joined in, for reading (tests, the MCP server, reports).
+export async function machineItems(store, pk) {
+  const rows = (await store.partition(pk)).filter(e => e.rowKey !== 'machine' && !isInstallRow(e));
+  const catalog = new Map((await store.query(`PartitionKey ge '${CATALOG_PREFIX}' and PartitionKey lt '${CATALOG_PREFIX.slice(0, -1)}.'`))
+    .filter(isCatalogRow).map(e => [`${e.Kind}\u0000${e.rowKey}`, e]));
+  return rows.map(e => {
+    const c = e.CatalogRK ? catalog.get(`${e.Kind}\u0000${e.CatalogRK}`) : null;
+    if (!c) return e;
+    const { partitionKey, rowKey: crk, FirstSeen, LastSeen, ...shared } = c;
+    return { ...shared, ...e, Detail: e.Detail ?? c.Detail, CatalogFirstSeen: FirstSeen, CatalogLastSeen: LastSeen };
+  });
 }
 
 export async function importFolder(store, folder, { log = () => {} } = {}) {
@@ -320,28 +405,23 @@ export async function importFolder(store, folder, { log = () => {} } = {}) {
 
 // ---------- background lookups ----------
 
-// Groups of rows (same Kind + item + version on any machine) still installed somewhere, due for a lookup: never
-// checked, failed last time, or older than maxAgeHours. Oldest answer first.
+// Catalog rows (one per item version) still installed on some machine and due for a lookup: never checked, failed
+// last time, or older than maxAgeHours. Oldest answer first. Each entry is { rows: [catalog row], checked, failed }.
 export function dueGroups(entities, { now = Date.now(), maxAgeHours = 24, limit = 40 } = {}) {
   const cutoff = new Date(now - maxAgeHours * 3_600_000).toISOString();
-  const groups = new Map();
-  for (const e of entities) {
-    if (!LOOKUP.has(e.Kind) || e.Removed) continue;
-    const g = gk(e.Kind, e.ItemKey, e.InstalledVersion);
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push(e);
-  }
-  return [...groups.values()]
-    .map(list => ({ rows: list, checked: list.map(e => e.LastChecked || '').sort().at(-1), failed: list.some(e => e.LookupStatus === 'failed' || e.LookupStatus === 'pending') }))
+  const live = new Set(entities.filter(e => e.CatalogRK && !e.Removed && !isCatalogRow(e)).map(e => `${e.Kind}\u0000${e.CatalogRK}`));
+  return entities
+    .filter(e => isCatalogRow(e) && LOOKUP.has(e.Kind) && live.has(`${e.Kind}\u0000${e.rowKey}`))
+    .map(e => ({ rows: [e], checked: e.LastChecked || '', failed: e.LookupFailed === true || e.NeedsCheck === true || (CVE_KINDS.has(e.Kind) && !e.CvesChecked) || e.LookupStatus === 'failed' || e.LookupStatus === 'pending' }))
     .filter(g => !g.checked || g.failed || g.checked < cutoff)
-    .sort((a, b) => (a.checked || '').localeCompare(b.checked || ''))
+    .sort((a, b) => a.checked.localeCompare(b.checked))
     .slice(0, limit);
 }
 
 const KEV_STATUSES = new Set(['current', 'outdated', 'unsupported']);
 
 // sources: the bot's createSources() (bot/run.mjs). Each lookup is independent and may fail on its own.
-export async function lookupItem(e, sources) {
+async function baseLookup(e, sources) {
   const d = e.Detail ? JSON.parse(e.Detail) : {};
   if (e.Kind === 'winget-package') {
     if (d.source && !/^winget$/i.test(d.source)) return { lookup: 'not-checked', note: `${d.source} apps update through their own store.` };
@@ -395,22 +475,117 @@ export async function lookupItem(e, sources) {
     const inv = { hardware: { bios: { vendor: e.Vendor, version: e.InstalledVersion, releaseDate: e.ItemDate }, system: d.system || {}, baseboard: d.baseboard || {} } };
     return biosLookup(await firmwareStatus(inv, sources.vendorFile));
   }
+  if (e.Kind === 'driver' || e.Kind === 'network-adapter') return driverLookup(e);
   return { lookup: 'n/a', note: NOTE.measurement };
 }
 
-export async function runLookups(store, sources, { now = () => Date.now(), maxAgeHours = 24, limit = 40, log = () => {} } = {}) {
-  const filter = [...LOOKUP].map(k => `Kind eq '${k}'`).join(' or ');
-  const groups = dueGroups(await store.query(filter), { now: now(), maxAgeHours, limit });
-  const tally = { checked: 0, failed: 0, items: groups.length };
-  for (const g of groups) {
-    let l;
-    try { l = await lookupItem(g.rows[0], sources); tally.checked++; }
-    catch (err) { l = { lookup: 'failed', note: `Lookup failed: ${String(err.message || err).slice(0, 200)}` }; tally.failed++; }
-    const cols = lookupColumns({ ...l, checked: new Date(now()).toISOString() });
-    await store.upsert(g.rows.map(e => ({ ...e, ...cols })));
+// Drivers: what Windows Update offered the computers that run this driver version (scanner 1.4.0, stored on the
+// catalog row at import), so this works for every brand.
+export function driverLookup(e) {
+  const wu = null; // Windows Update itself, on the computer: there is no public page per offer
+  if (e.OfferedVersion || e.OfferedDate) {
+    const what = e.OfferedVersion || `a driver dated ${e.OfferedDate}`;
+    return { lookup: 'outdated', latest: e.OfferedVersion || null, latestDate: e.OfferedDate || null, source: wu,
+      note: `Windows Update offers ${what}${e.OfferedTitle ? ` ("${e.OfferedTitle}")` : ''}. Install it through Windows Update or the maker's tool.` };
   }
-  if (groups.length) log(`findings: looked up ${groups.length} item${groups.length > 1 ? 's' : ''} (${tally.failed} failed)`);
+  if (e.OfferCheckedAt) return { lookup: 'current', source: wu, note: `Windows Update offered no newer driver for this device when it was last asked (${String(e.OfferCheckedAt).slice(0, 10)}). The maker may still have a newer one on its own site.` };
+  return { lookup: 'not-checked', note: 'Scanner 1.4.0 or later asks Windows Update for driver updates; scan again with it.' };
+}
+
+const MAX_CVES = 30;
+const cveFields = (list, source) => {
+  const top = sortCves(list).slice(0, MAX_CVES).map(c => ({ cve: c.cve, score: c.score ?? null, severity: c.severity ?? null, kev: Boolean(c.kev), fixedIn: c.fixedIn ?? null, kb: c.kb ?? null,
+    published: c.published ?? null, title: c.title ? String(c.title).slice(0, 160) : null, record: c.record ?? null }));
+  return { cveCount: list.length, cveMax: list.reduce((m, c) => Math.max(m, c.score ?? 0), 0) || null, cves: list.length ? JSON.stringify(top) : null, cveSource: source };
+};
+
+// The kind's own answer (latest version, known problems, CISA KEV), then every CVE for this exact version: NVD for
+// apps, drivers and BIOS (once the product is matched), the Security Update Guide for Windows. A CVE source that fails
+// adds a note but keeps the rest of the answer.
+export async function lookupItem(e, sources) {
+  const l = await baseLookup(e, sources);
+  if (CVE_KINDS.has(e.Kind)) l.cvesChecked = true;
+  if (e.Kind === 'os' && sources.msrc) {
+    try {
+      const d = e.Detail ? JSON.parse(e.Detail) : {};
+      let patchedThrough = null;
+      try { const info = await sources.releaseInfo(windowsGeneration(d.build)); patchedThrough = (info.builds.get(d.build) || []).find(b => b.ubr === (d.ubr ?? 0))?.date ?? null; } catch { /* use the default window */ }
+      const r = await sources.msrc.windowsCves({ build: d.build, ubr: d.ubr, displayVersion: d.displayVersion, architecture: d.architecture }, { patchedThrough });
+      Object.assign(l, cveFields(r.cves, 'Microsoft Security Update Guide'));
+    } catch (err) { l.note = `${l.note ? `${l.note} ` : ''}Security Update Guide could not be checked: ${String(err.message || err).slice(0, 120)}`; }
+  }
+  if (NVD_KINDS.has(e.Kind) && sources.nvd && sources.productMatch) {
+    try {
+      const m = await sources.productMatch({ kind: e.Kind, name: e.Name, vendor: e.Vendor });
+      Object.assign(l, { productKey: m.key, cpeMatch: m.status, cpe: m.vendor ? `${m.part}:${m.vendor}:${m.product}` : null, cpeCandidates: m.candidates?.length ? JSON.stringify(m.candidates) : null });
+      if ((m.status === 'strong' || m.status === 'confirmed') && e.InstalledVersion) Object.assign(l, cveFields(await sources.nvd.cves(m, e.InstalledVersion), 'NVD'));
+    } catch (err) { l.note = `${l.note ? `${l.note} ` : ''}NVD could not be checked: ${String(err.message || err).slice(0, 120)}`; }
+  }
+  return l;
+}
+
+// One lookup per catalog row (item version), whatever the number of machines running it. A changed answer adds check
+// history rows. A failed lookup keeps the last good answer (marked LookupFailed, retried next run) so a flaky source
+// never makes history say a CVE went away and came back.
+// confirmed: an admin's product choices from the Inventory catalog page (settings/products.json): productKey ->
+// "a:vendor:product", or null for "not this product". A changed choice rechecks the versions it covers at once.
+export async function runLookups(store, sources, { now = () => Date.now(), maxAgeHours = 24, limit = 40, log = () => {}, confirmed = {} } = {}) {
+  const filter = [...LOOKUP].map(k => `Kind eq '${k}'`).join(' or ');
+  const entities = await store.query(filter);
+  for (const e of entities) {
+    if (!isCatalogRow(e) || !e.ProductKey || !Object.hasOwn(confirmed, e.ProductKey)) continue;
+    const want = confirmed[e.ProductKey];
+    if (want === null ? e.CpeMatch !== 'rejected' : (e.Cpe !== want || e.CpeMatch !== 'confirmed')) e.NeedsCheck = true;
+  }
+  const groups = dueGroups(entities, { now: now(), maxAgeHours, limit });
+  const tally = { checked: 0, failed: 0, items: groups.length };
+  // Product matches are made once per product (not per version) and kept 30 days in the "product" partition.
+  const products = new Map((groups.length ? await store.query("PartitionKey eq 'product'") : []).filter(e => e.partitionKey === 'product').map(e => [e.ProductKey, e]));
+  const fresh = new Date(now() - 30 * 86_400_000).toISOString(), memo = new Map();
+  const productMatch = sources.nvd ? async item => {
+    const key = productKey(item.kind, item.name, item.vendor);
+    if (Object.hasOwn(confirmed, key)) return matchProduct(item, sources.nvd, confirmed);
+    if (memo.has(key)) return memo.get(key);
+    const c = products.get(key);
+    let m;
+    if (c && c.CheckedAt > fresh) m = { key, status: c.Status, part: c.Part ?? undefined, vendor: c.CpeVendor ?? undefined, product: c.CpeProduct ?? undefined, candidates: c.Candidates ? JSON.parse(c.Candidates) : [] };
+    else {
+      m = await matchProduct(item, sources.nvd, confirmed);
+      await store.upsert([{ partitionKey: 'product', rowKey: rowKey('product', key), Category: 'Product', Kind: 'product-match', ProductKey: key, ItemKind: item.kind, Name: item.name, Vendor: item.vendor,
+        Status: m.status, Part: m.part ?? null, CpeVendor: m.vendor ?? null, CpeProduct: m.product ?? null, Candidates: m.candidates?.length ? JSON.stringify(m.candidates) : null, CheckedAt: new Date(now()).toISOString() }]);
+    }
+    memo.set(key, m);
+    return m;
+  } : null;
+  const src = { ...sources, productMatch };
+  for (const g of groups) {
+    const row = g.rows[0], at = new Date(now()).toISOString();
+    let next;
+    try {
+      const l = await lookupItem({ ...row, InstalledVersion: row.Version }, src);
+      tally.checked++;
+      next = { ...row, ...lookupColumns({ ...l, checked: at }), LookupFailed: null, LastError: null, NeedsCheck: null };
+    } catch (err) {
+      tally.failed++;
+      const msg = `Lookup failed: ${String(err.message || err).slice(0, 200)}`;
+      next = row.LastChecked && row.LookupStatus !== 'failed' && row.LookupStatus !== 'pending'
+        ? { ...row, LookupFailed: true, LastError: msg, LastErrorAt: at }
+        : { ...row, ...lookupColumns({ lookup: 'failed', note: msg, checked: at }), LookupFailed: null, LastError: msg, LastErrorAt: at };
+    }
+    await store.upsert([next, ...historyRows(next, answerChanges(row, next, row.Version), at)]);
+  }
+  if (groups.length) log(`findings: looked up ${groups.length} item version${groups.length > 1 ? 's' : ''} (${tally.failed} failed)`);
   return tally;
+}
+
+// The Inventory catalog page reads this file (catalog/catalog.json in the local data folder).
+export async function writeSnapshot(store, folder, { now = () => Date.now(), choices = {} } = {}) {
+  const snap = buildSnapshot(await store.query(null), { now: now(), choices });
+  const file = path.join(folder, 'catalog', 'catalog.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(`${file}.tmp`, JSON.stringify(snap));
+  await rename(`${file}.tmp`, file);
+  return { file, items: snap.items.length, versions: snap.versions };
 }
 
 // ---------- where the table lives ----------
@@ -423,6 +598,17 @@ export async function readSettings(repos) {
     } catch { /* none here */ }
   }
   return null;
+}
+
+// Product choices made on the Inventory catalog page (settings/products.json in the first --repo that has one).
+export async function readProductChoices(repos) {
+  for (const r of repos) {
+    try {
+      const s = JSON.parse(await readFile(path.join(r, 'settings', 'products.json'), 'utf8'));
+      if (s?.schema === 'hm360.products/1' && s.choices && typeof s.choices === 'object') return s.choices;
+    } catch { /* none here */ }
+  }
+  return {};
 }
 
 export async function resolveLocation({ account = null, table = null, repos = [], env = process.env }) {
@@ -450,10 +636,12 @@ async function main(argv) {
     const { createSources } = await import('./run.mjs');
     const cacheDir = path.resolve(arg('--cache') || path.join(os.homedir(), '.hm360-bot-cache'));
     await mkdir(cacheDir, { recursive: true });
-    const sources = createSources({ cacheDir, githubToken: process.env.GITHUB_TOKEN || null });
-    const r = await runLookups(store, sources, { limit: Number(arg('--limit', 40)), maxAgeHours: Number(arg('--max-age-hours', 24)), log: console.log });
+    const sources = { ...createSources({ cacheDir, githubToken: process.env.GITHUB_TOKEN || null }), nvd: createNvd(), msrc: createMsrc({ dir: cacheDir }) };
+    const r = await runLookups(store, sources, { limit: Number(arg('--limit', 40)), maxAgeHours: Number(arg('--max-age-hours', 24)), log: console.log, confirmed: await readProductChoices(repos) });
     if (!r.items) console.log('findings: nothing due for lookup');
   }
+  const snapDir = arg('--snapshot') || repos[0];
+  if (snapDir && !argv.includes('--no-snapshot')) { const w = await writeSnapshot(store, path.resolve(snapDir), { choices: await readProductChoices(repos) }); console.log(`findings: catalog snapshot ${w.file} (${w.items} items, ${w.versions} versions)`); }
   console.log(`findings: done (${store.label})`);
 }
 

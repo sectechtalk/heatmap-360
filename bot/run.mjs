@@ -17,6 +17,7 @@ import { createFeeds } from './kev.mjs';
 import { createCveLookup } from './cve.mjs';
 import { createReleaseNotesLookup, createGithubReleaseLookup } from './appissues.mjs';
 import { checkInventory } from '../server/schema.mjs';
+import { cabFirstFile, decodeXml } from './cab.mjs';
 
 const ID = /^[0-9]{14}-[0-9a-f]{8}$/;
 const UA = 'HeatMap360-bot/1.0 (+https://github.com/<your-account>/heatmap-360)';
@@ -28,7 +29,7 @@ async function page(url, fetchImpl, { missingOk = false } = {}) {
   return r.text();
 }
 // Vendor firmware catalogs are fetched only from these hosts (bot/firmware.mjs builds the URLs).
-const VENDOR_HOSTS = new Set(['hpia.hpcloud.hp.com', 'download.lenovo.com']);
+const VENDOR_HOSTS = new Set(['hpia.hpcloud.hp.com', 'download.lenovo.com', 'downloads.dell.com']);
 
 export function createSources({ fetchImpl = (...a) => fetch(...a), cacheDir, githubToken = null }) {
   const memo = new Map();
@@ -45,6 +46,15 @@ export function createSources({ fetchImpl = (...a) => fetch(...a), cacheDir, git
     vendorFile: url => {
       const u = new URL(url);
       if (u.protocol !== 'https:' || !VENDOR_HOSTS.has(u.hostname)) return Promise.reject(new Error(`${u.hostname} is not an allowed vendor source`));
+      // Dell publishes its catalogs as .cab files: unpacked here (bot/cab.mjs), the XML text is returned.
+      if (u.pathname.endsWith('.cab')) return once(url, async () => {
+        const r = await fetchImpl(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(60_000) });
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error(`${u.hostname} returned HTTP ${r.status}`);
+        const bytes = Buffer.from(await r.arrayBuffer());
+        if (bytes.length > 50 * 1024 * 1024) throw new Error('vendor catalog is too large');
+        return decodeXml(cabFirstFile(bytes));
+      });
       return once(url, () => page(url, fetchImpl, { missingOk: true }));
     },
     cveRecord: createCveLookup({ dir: cacheDir, fetchImpl }),

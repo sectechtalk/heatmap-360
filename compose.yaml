@@ -15,5 +15,17 @@ services:
       HM360_DEV_ADMIN_CONTAINER: "1"
       HM360_DATA_DIR: /data/exchange
       HM360_PUBLIC_URL: http://localhost:3460
+      HM360_ADPOSTURE_DIR: /data/adposture
+      HM360_ATTACKPATHS_DIR: /data/attackpaths
+      HM360_ENTRAPOSTURE_DIR: /data/entraposture
+      HM360_M365POSTURE_DIR: /data/m365posture
     volumes:
       - ./data/exchange:/data/exchange
+      # AD posture reports written by tools/adposture/Invoke-PingCastleScan.ps1 on the host; the app only reads them.
+      - ./data/adposture:/data/adposture:ro
+      # BloodHound summaries written by tools/bloodhound/Invoke-BloodHoundScan.ps1 on the host; read only here too.
+      - ./data/attackpaths:/data/attackpaths:ro
+      # Maester results written by tools/entraposture/Invoke-MaesterScan.ps1 on the host; read only here too.
+      - ./data/entraposture:/data/entraposture:ro
+      # Monkey365 results written by tools/m365posture/Invoke-Monkey365Scan.ps1 on the host; read only here too.
+      - ./data/m365posture:/data/m365posture:ro

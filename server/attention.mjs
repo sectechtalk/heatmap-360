@@ -2,7 +2,8 @@
 // reads for free. Exploits come from CISA's Known Exploited Vulnerabilities catalog (KEV) plus zero-day / actively
 // exploited headlines on the Internet - Exploits and Internet - Patches feeds. Disruptions come from the Service health
 // feeds (outages, and degradations that last for hours). Report only: it never changes anything and never posts.
-// It tracks what is happening in the wild; it does not match items against scanned computers (that is planned work).
+// It tracks what is happening in the wild; server/exposure.mjs ("Are we affected?") matches the exploit items against
+// the scanned computers.
 //
 // The bar is deliberately high so the page stays short. Every rule is in RULES below so it can be tuned in one place.
 import { iso, clip } from './services.mjs';
@@ -55,6 +56,8 @@ export function kevItems(kev, now, r = RULES) {
         detail: clip(v.shortDescription, 400), started: iso(`${v.dateAdded}T00:00:00Z`), dueDate: v.dueDate || null,
         why: [`Exploited in the wild: CISA added ${id} to the Known Exploited Vulnerabilities catalog on ${v.dateAdded}.`, ransomware ? 'CISA says ransomware campaigns are known to use it.' : null].filter(Boolean),
         sources: [{ name: 'CISA KEV catalog', link: kevLink(id) }, { name: `CVE record ${id}`, link: cveLink(id) }],
+        // The catalog entry itself, so "Are we affected?" can match it against scanned computers.
+        kev: [{ cveID: id, vendorProject: v.vendorProject || '', product: v.product || '', vulnerabilityName: v.vulnerabilityName || '', dateAdded: v.dateAdded, knownRansomwareCampaignUse: v.knownRansomwareCampaignUse || '' }],
       };
     });
 }
@@ -81,7 +84,7 @@ export function mergeExploits(kev, hits, r = RULES) {
   for (const hit of hits) {
     let item = hit.cves.map(c => byCve.get(c)).find(Boolean);
     if (!item) {
-      item = { id: `news:${hit.cves[0] || hit.link}`, kind: 'exploit', cves: [], ransomware: false, title: clip(hit.title, 220), detail: clip(hit.summary, 400), started: hit.date, why: [], sources: [], news: [] };
+      item = { id: `news:${hit.cves[0] || hit.link}`, kind: 'exploit', cves: [], kev: [], ransomware: false, title: clip(hit.title, 220), detail: clip(hit.summary, 400), started: hit.date, why: [], sources: [], news: [] };
       items.push(item);
     }
     for (const c of hit.cves) if (!item.cves.includes(c)) { item.cves.push(c); byCve.set(c, item); }
@@ -147,7 +150,7 @@ export function createAttention({ news, serviceHealth, fetchImpl = (...a) => fet
     value.then(v => { if (!v.ok && kevCache?.value === value) kevCache.at = at - kevTtlMs + 300_000; });
     return value;
   }
-  return async function get() {
+  async function get() {
     const t = now();
     const [k, pages, svc] = await Promise.all([
       kev(),
@@ -170,5 +173,8 @@ export function createAttention({ news, serviceHealth, fetchImpl = (...a) => fet
         servicesError: svc ? null : 'Could not read the Service health feeds.',
       },
     };
-  };
+  }
+  // The whole catalog (same hourly cache), for matching news items whose CVE CISA added before the 7-day window.
+  get.kevCatalog = () => kev().then(k => (k.ok ? k.data : null));
+  return get;
 }

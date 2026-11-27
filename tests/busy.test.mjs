@@ -32,7 +32,7 @@ test('h() routes clicks and submits through busy(), with a default wording for b
 });
 
 test('rail and shell controls outside h() and page loads give feedback too', () => {
-  for (const sel of ['#theme-toggle', '.nav-label', '#nav-toggle', '.app-switcher-toggle', 'a.app-switch-item[href]']) assert.ok(app.includes(sel), sel);
+  for (const sel of ['#theme-toggle', '.nav-label', '#nav-toggle', '.app-switcher-toggle', 'a.app-switch-item[href]', '#view summary']) assert.ok(app.includes(sel), sel);
   assert.match(app, /activity\.start\(`Loading \$\{page\}…`\)/);
 });
 

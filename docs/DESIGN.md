@@ -146,11 +146,43 @@ does not matter, and the web app can later read it with its managed identity.
   role, save the new name. The job then rebuilds the table from the scan results. The storage account is never created
   by code.
 
+## Inventory catalog (`bot/catalog.mjs`, same findings table)
+
+Asked by the owner 2026-11-27: every driver, software and firmware version logged, stored once (de-duplicated), checked
+for vulnerabilities, updates and known problems, with a history.
+
+- **Catalog rows** (`catalog-<kind>`): one per item + version across all machines. They hold the lookup answer, so a
+  lookup runs once per version, not once per machine. Each version keeps its own row (several versions side by side
+  are shown, never merged).
+- **Machine rows** for catalog kinds (os, app, winget-package, bios, driver, network-adapter, disk, baseboard, cpu,
+  Defender, TPM) are pointers: `CatalogRK`, `InstalledVersion`, dates, and only the detail that belongs to that
+  computer (uptime, disk health). Measurements, settings, events and installed KBs stay per machine as before.
+- **Install history** (`install|...` rows in the machine partition): installed, version changed, removed. Written only
+  when something changes, never on the first scan of a machine.
+- **Check history** (`history-<kind>`): first check, newly exploited CVE, CVE no longer matched, known problem
+  reported or gone, update available, unsupported. A failed lookup keeps the last good answer (`LookupFailed`) and adds
+  no history, so a flaky source never makes a CVE look like it went away and came back.
+- Moving an existing table: machine rows without `RowsVersion: 2` are re-imported once from their newest scan, and
+  the answers they carried seed the catalog, so no lookup is repeated.
+- After each run the findings job writes `catalog/catalog.json` (local data folder) for the **Inventory catalog** page
+  (`#catalog`, elevated admins).
+- **CVEs for every version** (approved by the owner 2026-11-27, `bot/nvd.mjs`, `bot/msrc.mjs`): apps, drivers and BIOS
+  are matched once per product to NVD's product dictionary (CPE). Only a strong match (every product word plus the
+  vendor) is used at once; weaker ones are proposed and wait for an admin's Confirm or "Not this product" on the page
+  (saved in `settings/products.json`, used by the next run). Each version then asks NVD for the CVEs that include that
+  exact version (`virtualMatchString`, NVD applies its own ranges). Windows builds use the Security Update Guide
+  instead: every CVE fixed in a later build of the same Windows version, with its KB and exploited flag. No key; NVD
+  requests are spaced 6.5 s apart. Product matches are kept 30 days in the `product` partition.
+- **Driver updates for every brand** (scanner 1.4.0): the scanner asks Windows Update which driver updates it offers
+  that computer (search only) and the import puts the offer on the driver version's catalog row.
+- **Dell BIOS**: Dell's catalog index and per-model catalogs (`.cab`, unpacked by `bot/cab.mjs`), keyed by the 4-hex
+  system ID the scanner sends for Dell computers only.
+
 ## Uploading (two steps)
 
 The scanner saves `Documents\HeatMap360\inventory-<time>.json` and sends nothing. The user uploads that file from the
 "Get the scanner" page (the browser posts it to `/api/scans` and keeps the scan ID and token in local storage so it can
-poll status and download the PDF; "Save ticket" writes `scan-<id>.json` for `-Resume`) or with `-Upload`.
+poll status and download the results as one .mhtml file; "Save ticket" writes `scan-<id>.json` for `-Resume`) or with `-Upload`.
 
 ## Grades
 
@@ -170,9 +202,18 @@ network: worst finding (notes don't count). BIOS: update available warn, current
 
 ## Roadmap
 
-1. **v1:** inventory, Windows and app update status, results page + PDF.
+1. **v1:** inventory, Windows and app update status, results page + PDF (the uploader's PDF was replaced by a single .mhtml file on 2026-11-27).
 2. **v1.1:** machine checks: event log errors, NIC settings, BIOS updates (HP, Lenovo) and BIOS age.
 3. **v1.2 (this):** network health, disk and battery health, service health page, Options page.
 4. Next: more vendor lookups (Dell, drivers, disk firmware),
    on-demand vulnerability check. Report only: no remediation (that is Remediation 360).
 4. Wider research (non-official sources, tiered models) once a model budget is set.
+
+## Incident cases (`server/cases.mjs`)
+
+`cases/<id>.json` in the data store, schema `hm360.case/1`: title, type (playbook), status (open/closed), phase
+(detection, containment, recovery, post), triage (NIST SP 800-61 functional / information / recoverability), checklist
+(step id -> who and when), timeline (append-only), evidence (`E<n>`, label, kind, data, SHA-256 of the data as JSON
+with sorted keys), review (written when closing), version (every change must send the current one; an old version
+gets 409). Closed cases refuse every change. In production the cases sit in hm-360-data under `cases/`, which does not
+start the bot workflow (it watches `inbox/` only).
